@@ -1,0 +1,2843 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="2 Peas"/>
+<meta name="theme-color" content="#f7f4ef"/>
+<title>2 Peas in a Pod</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+body{background:#f7f4ef;font-family:'DM Sans',sans-serif;}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+input[type=date]{color-scheme:light;}input[type=time]{color-scheme:light;}
+select{font-family:inherit;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const KEYS={
+  grocery:"peas_grocery",groceryCats:"peas_gcats",groceryTemplates:"peas_gtpl",noticeboard:"peas_board",todo:"peas_todo",events:"peas_events",
+  expenses:"peas_expenses",settled:"peas_settled",pickup:"peas_pickup",
+  viewer:"peas_viewer",expiry:"peas_expiry",recipes:"peas_recipes",
+  activities:"peas_activities",knowledge:"peas_knowledge",budget:"peas_budget",
+  budgetTemplates:"peas_budget_tpl",budgetSettled:"peas_budget_settled",
+  pin:"peas_pin",pinSession:"peas_pin_session",pickupEnabled:"peas_pickup_enabled",
+  actPauses:"peas_act_pauses"
+};
+
+// ─── Supabase ────────────────────────────────────────────────────────────────
+const SUPA_URL="https://vusljzywhlpjmzznewkq.supabase.co";
+const SUPA_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ1c2xqenl3aGxwam16em5ld2txIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTEyMjMsImV4cCI6MjA5NzI4NzIyM30.zZS6C7wsnEaSSsn749NmhyH1InIQ0t1HcO16pg7NWk8";
+const supa=supabase.createClient(SUPA_URL,SUPA_KEY);
+
+// Hushålls-ID: sparas lokalt per enhet, delas via inbjudningskod
+function getHouseholdId(){
+  let hid=localStorage.getItem("peas_household_id");
+  if(!hid){hid="hh_"+Math.random().toString(36).slice(2,10);localStorage.setItem("peas_household_id",hid);}
+  return hid;
+}
+const HOUSEHOLD_ID=getHouseholdId();
+
+// Dessa sparas bara lokalt (enhetsspecifikt)
+const LOCAL_ONLY=new Set([KEYS.pin,KEYS.pinSession,KEYS.viewer]);
+
+async function dbGet(key){
+  try{
+    const{data,error}=await supa.from("household_data").select("value").eq("id",key+"_"+HOUSEHOLD_ID).maybeSingle();
+    if(error||!data)return null;
+    return data.value;
+  }catch{return null;}
+}
+async function dbSet(key,value){
+  try{
+    await supa.from("household_data").upsert(
+      {id:key+"_"+HOUSEHOLD_ID,household_id:HOUSEHOLD_ID,value,updated_at:new Date().toISOString()},
+      {onConflict:"id"}
+    );
+  }catch(e){console.warn("dbSet error",e);}
+}
+
+function useLS(key,init){
+  const isLocal=LOCAL_ONLY.has(key);
+  const [v,setV]=useState(()=>{
+    try{const s=localStorage.getItem(key);return s?JSON.parse(s):init;}catch{return init;}
+  });
+  const [synced,setSynced]=useState(isLocal);
+  const skipSave=React.useRef(true);
+
+  // Initial load från Supabase
+  useEffect(()=>{
+    if(isLocal){return;}
+    dbGet(key).then(val=>{
+      if(val!==null)setV(val);
+      setSynced(true);
+      skipSave.current=false;
+    }).catch(()=>{setSynced(true);skipSave.current=false;});
+  },[key]);
+
+  // Realtidssynk från andra enheter
+  useEffect(()=>{
+    if(isLocal)return;
+    const dbKey=key+"_"+HOUSEHOLD_ID;
+    const ch=supa.channel("rt_"+dbKey)
+      .on("postgres_changes",
+        {event:"*",schema:"public",table:"household_data",filter:"id=eq."+dbKey},
+        payload=>{
+          if(payload.new&&payload.new.value!==undefined){
+            setV(payload.new.value);
+          }
+        }
+      ).subscribe();
+    return()=>supa.removeChannel(ch);
+  },[key]);
+
+  // Spara vid ändringar
+  useEffect(()=>{
+    if(skipSave.current)return;
+    localStorage.setItem(key,JSON.stringify(v));
+    if(!isLocal)dbSet(key,v);
+  },[key,v]);
+
+  return[v,setV];
+}
+function useViewer(){return useLS(KEYS.viewer,"a");}
+
+const PA={id:"a",label:"Philip",color:"#b8815a",bg:"#fbeee6"};
+const PB={id:"b",label:"Melinda",color:"#5a8c5a",bg:"#e8f0e8"};
+const PERSONS=[PA,PB];
+
+const Av=({p,s=28})=>(
+  <div style={{width:s,height:s,borderRadius:"50%",background:p.bg,color:p.color,
+    display:"flex",alignItems:"center",justifyContent:"center",
+    fontSize:s*0.38,fontWeight:600,flexShrink:0,border:`1.5px solid ${p.color}33`}}>
+    {p.label[0]}
+  </div>
+);
+
+const PATHS={
+  cart:"M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 0 0-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 0 0-16.536-1.84M7.5 14.25 5.106 5.272M6 20.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm12.75 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z",
+  check:"m4.5 12.75 6 6 9-13.5",
+  todo:"M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z",
+  cal:"M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5",
+  coins:"M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
+  plus:"M12 4.5v15m7.5-7.5h-15",
+  x:"M6 18 18 6M6 6l12 12",
+  hand:"M15.59 14.37a6 6 0 0 1-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.631 8.41m5.96 5.96a14.926 14.926 0 0 1-5.841 2.58m-.119-8.54a6 6 0 0 0-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 0 0-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 0 1-2.448-2.448 14.9 14.9 0 0 1 .06-.312m-2.24 2.39a4.493 4.493 0 0 0-1.757 4.306 4.493 4.493 0 0 0 4.306-1.758M16.5 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z",
+  history:"M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
+  warn:"M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z",
+  chevL:"M15.75 19.5 8.25 12l7.5-7.5",
+  chevR:"m8.25 4.5 7.5 7.5-7.5 7.5",
+  bell:"M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0",
+  repeat:"M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 0 0-3.7-3.7 48.678 48.678 0 0 0-7.324 0 4.006 4.006 0 0 0-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 0 0 3.7 3.7 48.656 48.656 0 0 0 7.324 0 4.006 4.006 0 0 0 3.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3-3 3",
+  home:"M2.25 12 11.204 3.045c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25",
+  child:"M15.182 15.182a4.5 4.5 0 0 1-6.364 0M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75Zm-.375 0h.008v.015h-.008V9.75Zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75Zm-.375 0h.008v.015h-.008V9.75Z",
+  swap:"M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5",
+  flag:"M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5",
+  pencil:"m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125",
+  spark:"M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z",
+  star:"M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z",
+  link:"M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244",
+  wallet:"M21 12a2.25 2.25 0 0 0-2.25-2.25H15a3 3 0 1 1-6 0H5.25A2.25 2.25 0 0 0 3 12m18 0v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6m18 0V9M3 12V9m18-3a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6m18 0v3M3 6v3",
+  trash:"m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0",
+  template:"M9 12h3.75M9 15h3.75m-7.5-8.25h15m-15 0A2.25 2.25 0 0 0 3 6v1.5M18.75 3.75h-13.5A2.25 2.25 0 0 0 3 6v1.5m0 0v10.5A2.25 2.25 0 0 0 5.25 20.25h13.5A2.25 2.25 0 0 0 21 18V7.5m-18 0h18",
+  tag:"M9.568 3H5.25A2.25 2.25 0 0 0 3 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 0 0 5.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 0 0 9.568 3Z",
+  note:"M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z",
+  note:"M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z",
+};
+const Ic=({n,s=20,color="currentColor"})=>(
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+    strokeWidth={1.8} stroke={color} width={s} height={s} style={{flexShrink:0}}>
+    <path strokeLinecap="round" strokeLinejoin="round" d={PATHS[n]}/>
+  </svg>
+);
+
+const inp={width:"100%",padding:"11px 14px",borderRadius:12,border:"1.5px solid #e2ddd6",
+  background:"#fff",fontSize:15,color:"#2c2420",fontFamily:"inherit",outline:"none",boxSizing:"border-box"};
+const btnP={width:"100%",padding:"13px",borderRadius:14,background:"#2c2420",color:"#fff",
+  border:"none",fontSize:15,fontWeight:500,cursor:"pointer",fontFamily:"inherit"};
+
+function Modal({title,onClose,children}){
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",
+      display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:200}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#faf8f5",borderRadius:"24px 24px 0 0",
+        width:"100%",maxWidth:480,padding:"24px 20px 40px",
+        boxShadow:"0 -4px 40px rgba(0,0,0,0.15)",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <span style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:"#2c2420"}}>{title}</span>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:4}}><Ic n="x" s={22}/></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ConfirmModal({title,message,confirmLabel,danger,onConfirm,onClose}){
+  return(
+    <Modal title={title} onClose={onClose}>
+      <div style={{display:"flex",flexDirection:"column",gap:16}}>
+        <div style={{fontSize:14,color:"#6b6357",lineHeight:1.6}}>{message}</div>
+        <button style={{...btnP,background:danger?"#c0392b":"#2c2420"}} onClick={()=>{onConfirm();onClose();}}>{confirmLabel}</button>
+        <button style={{...btnP,background:"transparent",color:"#9b9186",border:"1.5px solid #e2ddd6"}} onClick={onClose}>Avbryt</button>
+      </div>
+    </Modal>
+  );
+}
+
+function PPick({val,onChange,label,allowNone}){
+  const opts=allowNone?[...PERSONS,{id:null,label:"Ingen",color:"#9b9186",bg:"#ede8e1"}]:PERSONS;
+  return(
+    <div>
+      {label&&<div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>{label}</div>}
+      <div style={{display:"flex",gap:8}}>
+        {opts.map(p=>(
+          <button key={p.id||"none"} onClick={()=>onChange(p.id)} style={{flex:1,padding:"10px",borderRadius:12,
+            fontSize:14,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",
+            justifyContent:"center",gap:8,background:val===p.id?p.bg:"#ede8e1",
+            color:val===p.id?p.color:"#6b6357",
+            border:val===p.id?`1.5px solid ${(p.color||"#9b9186")}55`:"1.5px solid transparent",
+            fontWeight:val===p.id?500:400}}>
+            {p.id?<Av p={p} s={22}/>:null}{p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const Card=({children,style:st})=>(
+  <div style={{background:"#fff",borderRadius:16,border:"0.5px solid #e2ddd6",overflow:"hidden",...st}}>{children}</div>
+);
+function SHdr({title,onAdd,children}){
+  return(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <span style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:"#2c2420"}}>{title}</span>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        {children}
+        {onAdd&&<button onClick={onAdd} style={{width:32,height:32,borderRadius:"50%",background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:0}}><Ic n="plus" s={18}/></button>}
+      </div>
+    </div>
+  );
+}
+const Empty=({n,text})=>(
+  <div style={{textAlign:"center",padding:"36px 20px",color:"#c4bcaf"}}>
+    <Ic n={n} s={36} color="#c4bcaf"/>
+    <div style={{fontSize:14,marginTop:8}}>{text}</div>
+  </div>
+);
+
+// Date helpers
+function fmt(d){return d.toISOString().split("T")[0];}
+const TODAY=fmt(new Date());
+const WEEKDAYS=["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"];
+const WEEKDAYS_SHORT=["Mån","Tis","Ons","Tor","Fre","Lör","Sön"];
+const MONTHS=["Januari","Februari","Mars","April","Maj","Juni","Juli","Augusti","September","Oktober","November","December"];
+
+function getNext7Days(){
+  // Show from today until end of current week (Friday), max 7 days
+  // On Saturday or Sunday: show full next week (Mon-Fri)
+  const days=[];
+  const now=new Date();
+  const todayDow=(now.getDay()+6)%7; // 0=Mon, 6=Sun
+  // If today is Saturday (5) or Sunday (6), show next full week Mon-Fri
+  const isWeekendNow=todayDow>=5;
+  const daysUntilNextMon=isWeekendNow?(8-now.getDay())%7||7:0;
+  const startOffset=isWeekendNow?daysUntilNextMon:0;
+  // End: reach the coming Friday (dow=4)
+  const daysUntilFriday=isWeekendNow?4:(4-todayDow);
+  const count=isWeekendNow?5:Math.max(1,daysUntilFriday+1);
+  for(let i=startOffset;i<startOffset+count;i++){
+    const d=new Date();d.setDate(d.getDate()+i);
+    const dow=(d.getDay()+6)%7;
+    const label=i===0?"Idag":i===1?"Imorgon":WEEKDAYS[dow];
+    days.push({date:fmt(d),label,dow});
+  }
+  return days;
+}
+function addDaysStr(s,n){const d=new Date(s+"T12:00:00");d.setDate(d.getDate()+n);return fmt(d);}
+function daysBetween(a,b){return Math.round((new Date(b+"T12:00:00")-new Date(a+"T12:00:00"))/86400000);}
+
+// Normalize time: handles 9, 930, 1830, 09:00, 9:30 etc.
+function normalizeTime(t){
+  if(!t||!t.trim())return null;
+  const s=t.trim().replace(/[^0-9:]/g,"");
+  // Already HH:MM
+  if(/^\d{1,2}:\d{2}$/.test(s)){
+    const[h,m]=s.split(":").map(Number);
+    if(h>=0&&h<=23&&m>=0&&m<=59)return`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+    return null;
+  }
+  // Pure digits: 9→09:00, 19→19:00, 930→09:30, 1830→18:30
+  if(/^\d{1,4}$/.test(s)){
+    const n=parseInt(s);
+    if(s.length<=2){const h=n;if(h>=0&&h<=23)return`${String(h).padStart(2,"0")}:00`;}
+    if(s.length===3){const h=parseInt(s[0]),m=parseInt(s.slice(1));if(h>=0&&h<=23&&m>=0&&m<=59)return`0${h}:${String(m).padStart(2,"0")}`;}
+    if(s.length===4){const h=parseInt(s.slice(0,2)),m=parseInt(s.slice(2));if(h>=0&&h<=23&&m>=0&&m<=59)return`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;}
+  }
+  return null; // invalid
+}
+function fmtEvTime(ev){
+  if(ev.allDay)return"Hela dagen";
+  if(!ev.time)return"";
+  return ev.endTime&&ev.endTime!==ev.time?`${ev.time}–${ev.endTime}`:ev.time;
+}
+
+// Multi-day expansion
+function expandMultiDayEvents(events){
+  const out=[];
+  events.forEach(ev=>{
+    if(ev.endDate&&ev.endDate>ev.date){
+      let d=ev.date;
+      while(d<=ev.endDate){
+        out.push({...ev,date:d,_multiDay:true,_multiFirst:d===ev.date,_multiLast:d===ev.endDate});
+        d=addDaysStr(d,1);
+      }
+    } else {
+      out.push(ev);
+    }
+  });
+  return out;
+}
+
+// Expand recurring events (user-defined recurrence)
+function expandRecurringUserEvents(events,fromDate,toDate){
+  const out=[];
+  events.forEach(ev=>{
+    if(!ev.recurrence||ev.recurrence==="none"){out.push(ev);return;}
+    const exceptions=new Set(ev.exceptions||[]);
+    let d=ev.date;
+    let count=0;
+    while(d<=toDate&&count<500){
+      if(d>=fromDate&&!exceptions.has(d)){
+        out.push({...ev,date:d,_recurInstance:true,_recurBase:ev.id});
+      }
+      count++;
+      switch(ev.recurrence){
+        case"daily": d=addDaysStr(d,1);break;
+        case"weekly": d=addDaysStr(d,7);break;
+        case"monthly":{const dt=new Date(d+"T12:00:00");dt.setMonth(dt.getMonth()+1);d=fmt(dt);break;}
+        case"yearly":{const dt=new Date(d+"T12:00:00");dt.setFullYear(dt.getFullYear()+1);d=fmt(dt);break;}
+        default: d=addDaysStr(d,999);
+      }
+    }
+  });
+  return out;
+}
+
+// No fixed recurring reminders - users add their own via the calendar
+
+const REMIND_OPTS=[
+  {id:"1w",days:7,label:"1 vecka"},{id:"1m",days:30,label:"1 månad"},
+  {id:"3m",days:90,label:"3 månader"},{id:"6m",days:180,label:"6 månader"},
+  {id:"custom",days:null,label:"Anpassat"},
+];
+function expiryAlertDate(item){
+  const d=daysBetween(TODAY,item.expires);
+  const lead=item.remindDays!=null?item.remindDays:(REMIND_OPTS.find(r=>r.id===item.remind)?.days??30);
+  return d>=0&&d<=lead;
+}
+function expiryToCalendarEvents(items){
+  const out=[];
+  (items||[]).forEach(ex=>{
+    out.push({id:`exp-${ex.id}`,title:`${ex.icon||"📋"} ${ex.title} utgår`,date:ex.expires,person:"both",color:"#d35400",isExpiry:true});
+    const lead=ex.remindDays??(REMIND_OPTS.find(r=>r.id===ex.remind)?.days??30);
+    const remindOn=addDaysStr(ex.expires,-lead);
+    if(remindOn!==ex.expires&&remindOn>=TODAY){
+      out.push({id:`exp-r-${ex.id}`,title:`${ex.icon||"📋"} Påminn: ${ex.title}`,date:remindOn,person:"both",color:"#e67e22",isExpiry:true});
+    }
+  });
+  return out;
+}
+
+// Conflict detection
+function timeToMin(t){if(!t)return null;const[h,m]=t.split(":").map(Number);return isNaN(h)?null:h*60+m;}
+function evEnd(ev){const s=timeToMin(ev.time);if(s==null)return null;const e=timeToMin(ev.endTime);return(e!=null&&e>s)?e:s+60;}
+function overlap(a,b){const aS=timeToMin(a.time),bS=timeToMin(b.time);if(aS==null||bS==null)return true;return aS<evEnd(b)&&bS<evEnd(a);}
+function persEvs(evs,pid){return evs.filter(e=>e.person===pid||e.person==="both");}
+function hasDayConflict(dayEvs){
+  const evs=dayEvs.filter(e=>!e.recurring&&!e.isExpiry);
+  const check=pid=>{const mine=persEvs(evs,pid);if(mine.length<2)return false;if(mine.length>=4)return true;const t=mine.filter(e=>e.time&&!e.allDay);if(t.length>=2)for(let i=0;i<t.length;i++)for(let j=i+1;j<t.length;j++)if(overlap(t[i],t[j]))return true;if(mine.length>=2&&t.length<mine.length)return true;return false;};
+  return check("a")||check("b");
+}
+function isHighLoad(dayEvs){const evs=dayEvs.filter(e=>!e.recurring&&!e.isExpiry);return persEvs(evs,"a").length>=3||persEvs(evs,"b").length>=3;}
+
+// Pickup helpers
+function cyclePickupPerson(id){if(id==="a")return"b";if(id==="b")return null;return"a";}
+function getPickupForDay(pickupData,dow,dateStr){const pd=pickupData[dow]||{};const ov=pd.overrides&&pd.overrides[dateStr];return ov||pd;}
+function isPickupAssigned(slot,f){if(!slot)return false;const id=slot[f];if(!id)return false;if(id==="other")return!!(slot[f+"Name"]?.trim());return true;}
+function slotHasPickup(slot){return isPickupAssigned(slot,"dropPerson")||isPickupAssigned(slot,"pickPerson");}
+// Pickup clash detection: does a calendar event overlap a pickup window for the assigned person?
+const DROP_WIN=[7*60,8*60+30]; // 07:00-08:30
+const PICK_WIN=[16*60,17*60+30]; // 16:00-17:30
+function pickupClash(slot,dayEvs){
+  const clashes=[];
+  // Check drop (lämning)
+  if(isPickupAssigned(slot,"dropPerson")){
+    const pid=slot.dropPerson; // "a","b", or "other"
+    if(pid!=="other"){
+      const evs=dayEvs.filter(e=>{
+        if(e.allDay||!e.time)return false;
+        const pid2=e.person;
+        return pid2===pid||pid2==="both";
+      });
+      for(const ev of evs){
+        const s=timeToMin(ev.time),en=evEnd(ev);
+        if(s!=null&&s<DROP_WIN[1]&&en>DROP_WIN[0])clashes.push({type:"drop",person:pid,ev});
+      }
+    }
+  }
+  // Check pick (hämtning)
+  if(isPickupAssigned(slot,"pickPerson")){
+    const pid=slot.pickPerson;
+    if(pid!=="other"){
+      const evs=dayEvs.filter(e=>{
+        if(e.allDay||!e.time)return false;
+        const pid2=e.person;
+        return pid2===pid||pid2==="both";
+      });
+      for(const ev of evs){
+        const s=timeToMin(ev.time),en=evEnd(ev);
+        if(s!=null&&s<PICK_WIN[1]&&en>PICK_WIN[0])clashes.push({type:"pick",person:pid,ev});
+      }
+    }
+  }
+  return clashes;
+}
+
+function slotsMatchBase(slot,base){return slot.dropPerson===base.dropPerson&&slot.pickPerson===base.pickPerson&&(slot.dropPersonName||"")===(base.dropPersonName||"")&&(slot.pickPersonName||"")===(base.pickPersonName||"");}
+function applyPickupCycle(slot,field,next){const nf=field+"Name";const out={...slot,[field]:next};if(next!=="other")delete out[nf];return out;}
+
+function PickupPersonBadge({slot,personField,emoji}){
+  if(!isPickupAssigned(slot,personField))return null;
+  const id=slot[personField];const custom=slot[personField+"Name"];
+  if(id==="other")return(<div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#6b6357"}}><span>{emoji}</span><div style={{width:18,height:18,borderRadius:"50%",background:"#ede8e1",color:"#6b6357",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600}}>{(custom||"?")[0]}</div><span style={{fontWeight:500,color:"#6b6357"}}>{custom}</span></div>);
+  const p=PERSONS.find(x=>x.id===id);if(!p)return null;
+  return(<div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#6b6357"}}><span>{emoji}</span><Av p={p} s={16}/><span style={{color:p.color,fontWeight:500}}>{p.label}</span></div>);
+}
+
+function filterTodosForViewer(todos,vid){return todos.filter(t=>!t.hiddenFrom||t.hiddenFrom!==vid);}
+function todoVisibility(vid,hf){if(!hf)return"both";const partner=vid==="a"?"b":"a";return hf===partner?"me":"both";}
+
+// ─── BRIEFING ─────────────────────────────────────────────────────────────────
+function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,navigateTo,pickupEnabled,actPauses}){
+  const visible=filterTodosForViewer(todos,viewerId);
+  // FIX: correctly expand and dedupe events for briefing
+  const FAR_FUTURE=addDaysStr(TODAY,5475);
+  const expandedUser=expandRecurringUserEvents(expandMultiDayEvents(userEvents),TODAY,FAR_FUTURE);
+  const allEvents=[...expandedUser,...expiryToCalendarEvents(expiryItems)];
+  const next7=getNext7Days();
+  const viewer=PERSONS.find(p=>p.id===viewerId)||PA;
+
+  const [boardNotes,setBoardNotes]=useLS(KEYS.noticeboard,[]);
+  const [boardInput,setBoardInput]=useState("");
+  const [boardEdit,setBoardEdit]=useState(null); // {id,text}
+
+  const addNote=()=>{
+    const t=boardInput.trim();
+    if(!t)return;
+    setBoardNotes(prev=>[{id:Date.now(),text:t,person:viewerId,ts:Date.now()},...prev]);
+    setBoardInput("");
+  };
+  const deleteNote=(id)=>setBoardNotes(prev=>prev.filter(n=>n.id!==id));
+  const saveEdit=()=>{
+    if(!boardEdit||!boardEdit.text.trim())return;
+    setBoardNotes(prev=>prev.map(n=>n.id===boardEdit.id?{...n,text:boardEdit.text.trim()}:n));
+    setBoardEdit(null);
+  };
+
+  const urgentTodos=visible.filter(t=>{
+    if(t.status==="done")return false;
+    return(t.dueDate&&t.dueDate<TODAY)||t.bucket==="soon"||t.bucket==="today";
+  }).slice(0,5);
+  const projectTodos=visible.filter(t=>t.status!=="done"&&t.bucket==="project").slice(0,3);
+
+  const pickupWarnings=[];
+  if(pickupEnabled){
+    next7.forEach(({date,label,dow})=>{
+      if(dow>=5)return;
+      const slot=getPickupForDay(pickupData,dow,date);
+      if(!slotHasPickup(slot))pickupWarnings.push(`${label}: ingen lämning/hämtning`);
+      else if(!isPickupAssigned(slot,"dropPerson"))pickupWarnings.push(`${label}: lämning saknas`);
+      else if(!isPickupAssigned(slot,"pickPerson"))pickupWarnings.push(`${label}: hämtning saknas`);
+    });
+  }
+
+  const upcomingExpiry=(expiryItems||[]).filter(expiryAlertDate).slice(0,4);
+  const ap=actPauses||{};
+  const weekActivities=(activities||[]).filter(act=>{
+    if(!act.recurring)return true; // one-offs always show
+    const p=ap[act.id];
+    if(!p)return true;
+    if(p.indefinite)return false;
+    if(p.until&&p.until>=TODAY)return false;
+    return true;
+  });
+
+  const bannerMsgs=[...pickupWarnings];
+  next7.forEach(({date})=>{
+    const evs=allEvents.filter(e=>e.date===date);
+    if(hasDayConflict(evs))bannerMsgs.push(`${date.slice(8)}/${date.slice(5,7)}: kalenderkonflikt`);
+    if(isHighLoad(evs))bannerMsgs.push(`${date.slice(8)}/${date.slice(5,7)}: hög belastning`);
+  });
+
+  return(
+    <div>
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:26,color:"#2c2420",lineHeight:1.15}}>
+          God {new Date().getHours()<12?"morgon":"dag"},{" "}
+          <span style={{fontStyle:"italic",color:"#b8815a"}}>{viewer.label}</span> 👋
+        </div>
+        <div style={{fontSize:13,color:"#9b9186",marginTop:4}}>{new Date().toLocaleDateString("sv-SE",{weekday:"long",day:"numeric",month:"long"})}</div>
+      </div>
+
+      {bannerMsgs.length>0&&(
+        <div style={{background:"#fff3cd",borderRadius:14,padding:"12px 14px",marginBottom:14,display:"flex",alignItems:"flex-start",gap:10,border:"1px solid #ffd96a"}}>
+          <Ic n="warn" s={18} color="#b8600d"/>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:"#7a4400",marginBottom:4}}>Varningar</div>
+            {bannerMsgs.slice(0,6).map((w,i)=>(<div key={i} style={{fontSize:12,color:"#7a4400",marginBottom:2}}>{w}</div>))}
+          </div>
+        </div>
+      )}
+
+      {upcomingExpiry.length>0&&(
+        <div style={{marginBottom:14}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:"#2c2420",marginBottom:8}}>Förfaller snart</div>
+          <Card>
+            {upcomingExpiry.map((ex,i)=>(
+              <div key={ex.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<upcomingExpiry.length-1?"0.5px solid #f2ede6":"none"}}>
+                <span style={{fontSize:16}}>{ex.icon||"📋"}</span>
+                <div style={{flex:1}}><div style={{fontSize:13,color:"#2c2420"}}>{ex.title}</div><div style={{fontSize:11,color:"#9b9186"}}>Utgår {ex.expires} · {daysBetween(TODAY,ex.expires)} dagar kvar</div></div>
+              </div>
+            ))}
+          </Card>
+        </div>
+      )}
+
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420",marginBottom:12}}>Veckan som kommer</div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {next7.map(({date,label,dow})=>{
+            const dayEvs=allEvents.filter(e=>e.date===date);
+            const conflict=hasDayConflict(dayEvs),busy=isHighLoad(dayEvs);
+            const isWeekend=dow>=5;
+            const slot=(!isWeekend&&pickupEnabled)?getPickupForDay(pickupData,dow,date):null;
+            const pickupClashes=slot&&slotHasPickup(slot)?pickupClash(slot,dayEvs):[];
+            // Recurring activities on this weekday
+            const dayActs=weekActivities.filter(a=>a.recurring&&a.dow===dow);
+            // Filter out paused activities (Briefing doesn't have actPauses, so just show all - pauses shown in Pickup)
+            const dateActs=weekActivities.filter(a=>!a.recurring&&a.date===date);
+            const allActs=[...dayActs,...dateActs];
+            if(dayEvs.length===0&&(!slot||!slotHasPickup(slot))&&allActs.length===0)return null;
+            return(
+              <div key={date} style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",overflow:"hidden"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px 8px",borderBottom:"0.5px solid #f2ede6"}}>
+                  <span style={{fontSize:13,fontWeight:600,color:"#2c2420"}}>{label}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    {conflict&&<span style={{fontSize:10,background:"#fff3cd",color:"#b8600d",padding:"2px 8px",borderRadius:6,fontWeight:500}}>⚠️ Konflikt</span>}
+                    {busy&&!conflict&&<span style={{fontSize:10,background:"#eef0f8",color:"#4a5a8c",padding:"2px 8px",borderRadius:6,fontWeight:500}}>Hög belastning</span>}
+                    {pickupClashes.length>0&&<span style={{fontSize:10,background:"#fdf0ee",color:"#c0392b",padding:"2px 8px",borderRadius:6,fontWeight:500}}>⚠️ Krockvarning</span>}
+                    <span style={{fontSize:11,color:"#c4bcaf"}}>{date.slice(5).replace("-","/")}</span>
+                  </div>
+                </div>
+                {dayEvs.map((ev,i)=>{const p=ev.person==="both"?null:PERSONS.find(p=>p.id===ev.person);return(
+                  <div key={ev.id+i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 14px",borderBottom:i<dayEvs.length-1?"0.5px solid #f7f4ef":"none"}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:ev.color,flexShrink:0}}/>
+                    <span style={{fontSize:13,color:"#2c2420",flex:1}}>{ev.title}{ev._multiDay&&!ev._multiFirst?" (forts.)":""}</span>
+                    {fmtEvTime(ev)&&<span style={{fontSize:11,color:"#9b9186"}}>{fmtEvTime(ev)}</span>}
+                    {p?<Av p={p} s={18}/>:<span style={{fontSize:10,color:"#9b9186"}}>Båda</span>}
+                  </div>
+                );})}
+                {allActs.map(act=>{const p=act.person?PERSONS.find(x=>x.id===act.person):null;return(
+                  <div key={act.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 14px",background:"#faf8f5",borderBottom:"0.5px solid #f7f4ef"}}>
+                    <span style={{fontSize:12}}>⚽</span>
+                    <span style={{fontSize:13,color:"#2c2420",flex:1}}>{act.childName}: {act.title}{act.time?` ${act.time}`:""}</span>
+                    {!act.recurring&&<span style={{fontSize:10,background:"#eef0f8",color:"#4a5a8c",padding:"1px 6px",borderRadius:6}}>Engång</span>}
+                    {p&&<Av p={p} s={18}/>}
+                  </div>
+                );})}
+                {slot&&slotHasPickup(slot)&&(
+                  <div style={{padding:"8px 14px",background:"#f7f4ef",display:"flex",flexWrap:"wrap",gap:12}}>
+                    {isPickupAssigned(slot,"dropPerson")&&<div style={{display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:11,color:"#9b9186"}}>Lämnar:</span><PickupPersonBadge slot={slot} personField="dropPerson" emoji="🌅"/></div>}
+                    {isPickupAssigned(slot,"pickPerson")&&<div style={{display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:11,color:"#9b9186"}}>Hämtar:</span><PickupPersonBadge slot={slot} personField="pickPerson" emoji="🌇"/></div>}
+                  </div>
+                )}
+              </div>
+            );
+          }).filter(Boolean)}
+        </div>
+      </div>
+
+      {(urgentTodos.length>0||projectTodos.length>0)&&(
+        <div style={{marginBottom:20}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420",marginBottom:12}}>Att göra</div>
+          {urgentTodos.length>0&&(
+            <Card style={{marginBottom:8}}>
+              <div style={{padding:"10px 14px 2px",fontSize:11,fontWeight:600,color:"#c0392b",letterSpacing:.5}}>SNART / PRIORITERAT</div>
+              {urgentTodos.map((t,i)=>{const p=PERSONS.find(p=>p.id===t.person);return(
+                <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<urgentTodos.length-1?"0.5px solid #f2ede6":"none"}}>
+                  <div style={{width:7,height:7,borderRadius:2,background:"#c0392b",flexShrink:0}}/>
+                  <span style={{fontSize:14,color:"#2c2420",flex:1}}>{t.text}</span>
+                  {t.dueDate&&t.dueDate<TODAY&&<span style={{fontSize:10,background:"#fdf0ee",color:"#c0392b",padding:"2px 6px",borderRadius:6}}>Försenad</span>}
+                  {t.status==="waiting"&&<span style={{fontSize:10,background:"#fbeee6",color:"#b8815a",padding:"2px 6px",borderRadius:6}}>Väntar</span>}
+                  {p&&<Av p={p} s={20}/>}
+                </div>
+              );})}
+            </Card>
+          )}
+          {projectTodos.length>0&&(
+            <Card>
+              <div style={{padding:"10px 14px 2px",fontSize:11,fontWeight:600,color:"#7b7cb8",letterSpacing:.5}}>PÅGÅENDE PROJEKT</div>
+              {projectTodos.map((t,i)=>{const p=PERSONS.find(p=>p.id===t.person);return(
+                <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<projectTodos.length-1?"0.5px solid #f2ede6":"none"}}>
+                  <div style={{width:7,height:7,borderRadius:2,background:"#7b7cb8",flexShrink:0}}/>
+                  <span style={{fontSize:14,color:"#2c2420",flex:1}}>{t.text}</span>
+                  {t.waitingFor&&<span style={{fontSize:10,background:"#eef0f8",color:"#4a5a8c",padding:"2px 6px",borderRadius:6}}>Väntar</span>}
+                  {p&&<Av p={p} s={20}/>}
+                </div>
+              );})}
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* ── Anslagstavla ── */}
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420",marginBottom:12}}>Anslagstavla</div>
+        <div style={{background:"#fff",borderRadius:16,border:"0.5px solid #e2ddd6",overflow:"hidden"}}>
+          {/* Input row */}
+          <div style={{display:"flex",gap:8,padding:"12px 14px",borderBottom:"0.5px solid #f2ede6"}}>
+            <input
+              style={{flex:1,border:"none",outline:"none",fontSize:13,color:"#2c2420",background:"transparent",fontFamily:"inherit"}}
+              placeholder="Skriv ett meddelande…"
+              value={boardInput}
+              onChange={e=>setBoardInput(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&addNote()}
+            />
+            <button onClick={addNote} disabled={!boardInput.trim()} style={{background:boardInput.trim()?"#b8815a":"#ede8e1",border:"none",borderRadius:10,padding:"6px 12px",cursor:boardInput.trim()?"pointer":"default",color:boardInput.trim()?"#fff":"#9b9186",fontSize:13,fontFamily:"inherit",fontWeight:500,transition:"background .15s"}}>Posta</button>
+          </div>
+          {/* Notes list */}
+          {boardNotes.length===0?(
+            <div style={{textAlign:"center",color:"#c4bcaf",padding:"24px 0",fontSize:13}}>Tomt än — skriv något!</div>
+          ):(
+            boardNotes.map((note,i)=>{
+              const p=PERSONS.find(x=>x.id===note.person)||PA;
+              const isLast=i===boardNotes.length-1;
+              const ago=(()=>{const s=Math.floor((Date.now()-note.ts)/1000);if(s<60)return"just nu";if(s<3600)return Math.floor(s/60)+"m";if(s<86400)return Math.floor(s/3600)+"h";return Math.floor(s/86400)+"d";})();
+              return(
+                <div key={note.id} style={{padding:"10px 14px",borderBottom:isLast?"none":"0.5px solid #f2ede6",display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <Av p={p} s={28}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    {boardEdit&&boardEdit.id===note.id?(
+                      <div style={{display:"flex",gap:6}}>
+                        <input autoFocus style={{flex:1,border:"0.5px solid #b8815a",borderRadius:8,padding:"4px 8px",fontSize:13,fontFamily:"inherit",outline:"none",color:"#2c2420"}}
+                          value={boardEdit.text} onChange={e=>setBoardEdit({...boardEdit,text:e.target.value})}
+                          onKeyDown={e=>{if(e.key==="Enter")saveEdit();if(e.key==="Escape")setBoardEdit(null);}}/>
+                        <button onClick={saveEdit} style={{background:"#b8815a",border:"none",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Spara</button>
+                        <button onClick={()=>setBoardEdit(null)} style={{background:"#ede8e1",border:"none",borderRadius:8,padding:"4px 8px",color:"#6b6357",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Avbryt</button>
+                      </div>
+                    ):(
+                      <div style={{fontSize:13,color:"#2c2420",wordBreak:"break-word"}}>{note.text}</div>
+                    )}
+                    <div style={{fontSize:10,color:"#c4bcaf",marginTop:3}}>{p.label} · {ago}</div>
+                  </div>
+                  {!boardEdit&&(
+                    <div style={{display:"flex",gap:2,flexShrink:0}}>
+                      <button onClick={()=>setBoardEdit({id:note.id,text:note.text})} style={{background:"none",border:"none",cursor:"pointer",padding:3,color:"#c4bcaf"}}><Ic n="pencil" s={13}/></button>
+                      <button onClick={()=>deleteNote(note.id)} style={{background:"none",border:"none",cursor:"pointer",padding:3}}><Ic n="trash" s={13} color="#d6d0c4"/></button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        {[
+          {id:"grocery",icon:"cart",label:"Inköpslista",color:"#b8815a"},
+          {id:"todo",icon:"todo",label:"Att göra",color:"#5a8c5a"},
+          {id:"calendar",icon:"cal",label:"Kalender",color:"#7b7cb8"},
+          {id:"pickup",icon:"child",label:"Hämtning",color:"#2980b9"},
+          {id:"economy",icon:"wallet",label:"Ekonomi",color:"#27ae60"},
+          {id:"info",icon:"spark",label:"Kunskapsbank",color:"#6b6357"},
+        ].map(item=>(
+          <button key={item.id} onClick={()=>navigateTo(item.id)} style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",padding:"14px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+            <div style={{width:36,height:36,borderRadius:10,background:item.color+"18",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n={item.icon} s={18} color={item.color}/></div>
+            <span style={{fontSize:13,color:"#2c2420",fontWeight:500}}>{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── GROCERY ──────────────────────────────────────────────────────────────────
+const RECIPE_AMBITION=[
+  {id:"enkel",label:"Enkel vardagsmat",color:"#5a8c5a",bg:"#e8f0e8"},
+  {id:"mellan",label:"Mellan",color:"#b8815a",bg:"#fbeee6"},
+  {id:"bjud",label:"Bjudmiddag",color:"#7b7cb8",bg:"#eef0f8"},
+];
+const RECIPE_PRICE=[
+  {id:"budget",label:"Budget",color:"#5a8c5a"},
+  {id:"normal",label:"Normal",color:"#b8815a"},
+  {id:"lyxigt",label:"Lyxigt",color:"#c0392b"},
+];
+const RECIPE_TIME=[
+  {id:"quick",label:"< 30 min"},{id:"medium",label:"30–60 min"},{id:"long",label:"> 60 min"},
+];
+
+function StarRating({value,onChange,size=18}){
+  const [hover,setHover]=useState(0);
+  return(
+    <div style={{display:"flex",gap:4}}>
+      {[1,2,3,4,5].map(n=>(
+        <button key={n} onMouseEnter={()=>setHover(n)} onMouseLeave={()=>setHover(0)} onClick={()=>onChange(n===value?0:n)} style={{background:"none",border:"none",cursor:"pointer",padding:0}}>
+          <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill={(hover||value)>=n?"#f39c12":"none"} stroke="#f39c12" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d={PATHS.star}/>
+          </svg>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function parseIngLine(line){const t=line.trim();if(!t)return null;const m=t.match(/^(.+?)[,;]\s*(.+)$/);return m?{name:m[1].trim(),qty:m[2].trim()}:{name:t,qty:""};}
+
+function RecipeForm({initial,onSave,onClose}){
+  const [f,setF]=useState(()=>initial||{title:"",url:"",ambition:"enkel",price:"normal",time:"medium",rating:0,ingredientsText:""});
+  const save=()=>{
+    if(!f.title.trim())return;
+    const ingredients=f.ingredientsText.split("\n").map(parseIngLine).filter(Boolean);
+    // url is optional – save empty string as null
+    onSave({...f,title:f.title.trim(),ingredients,url:f.url?.trim()||null});
+    onClose();
+  };
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <input style={inp} placeholder="Receptnamn*" value={f.title} onChange={e=>setF({...f,title:e.target.value})} autoFocus/>
+      <input style={inp} placeholder="Länk till recept (valfritt)" value={f.url||""} onChange={e=>setF({...f,url:e.target.value})}/>
+      <div>
+        <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Ambitionsnivå</div>
+        <div style={{display:"flex",gap:8}}>
+          {RECIPE_AMBITION.map(a=>(<button key={a.id} onClick={()=>setF({...f,ambition:a.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.ambition===a.id?a.bg:"#ede8e1",color:f.ambition===a.id?a.color:"#6b6357",border:f.ambition===a.id?`1.5px solid ${a.color}44`:"1.5px solid transparent"}}>{a.label}</button>))}
+        </div>
+      </div>
+      <div>
+        <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Tillagningstid</div>
+        <div style={{display:"flex",gap:8}}>
+          {RECIPE_TIME.map(t=>(<button key={t.id} onClick={()=>setF({...f,time:t.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.time===t.id?"#2c2420":"#ede8e1",color:f.time===t.id?"#fff":"#6b6357",border:"none"}}>{t.label}</button>))}
+        </div>
+      </div>
+      <div>
+        <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Pris per portion</div>
+        <div style={{display:"flex",gap:8}}>
+          {RECIPE_PRICE.map(p=>(<button key={p.id} onClick={()=>setF({...f,price:p.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.price===p.id?"#2c2420":"#ede8e1",color:f.price===p.id?"#fff":"#6b6357",border:"none"}}>{p.label}</button>))}
+        </div>
+      </div>
+      <div>
+        <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Betyg</div>
+        <StarRating value={f.rating||0} onChange={v=>setF({...f,rating:v})}/>
+      </div>
+      <div>
+        <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Ingredienser (en per rad, t.ex. "Mjölk, 2 st")</div>
+        <textarea style={{...inp,minHeight:120,resize:"vertical"}} value={f.ingredientsText||""} onChange={e=>setF({...f,ingredientsText:e.target.value})}/>
+      </div>
+      <button style={btnP} onClick={save}>Spara recept</button>
+    </div>
+  );
+}
+
+function RecipeCard({r,onAddToList,onEdit,onDelete}){
+  const [open,setOpen]=useState(false);
+  const amb=RECIPE_AMBITION.find(a=>a.id===r.ambition);
+  const ti=RECIPE_TIME.find(t=>t.id===r.time);
+  return(
+    <div style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",marginBottom:10,overflow:"hidden"}}>
+      <div style={{padding:"14px 16px",display:"flex",alignItems:"flex-start",gap:12}}>
+        <div style={{flex:1,cursor:"pointer"}} onClick={()=>setOpen(!open)}>
+          <div style={{fontSize:15,fontWeight:600,color:"#2c2420"}}>{r.title}</div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6,flexWrap:"wrap"}}>
+            {amb&&<span style={{fontSize:11,padding:"2px 7px",borderRadius:6,background:amb.bg,color:amb.color,fontWeight:500}}>{amb.label}</span>}
+            {ti&&<span style={{fontSize:11,color:"#9b9186"}}>⏱ {ti.label}</span>}
+            {r.rating>0&&<div style={{display:"flex",gap:2}}>{[1,2,3,4,5].map(n=>(<svg key={n} xmlns="http://www.w3.org/2000/svg" width={13} height={13} viewBox="0 0 24 24" fill={r.rating>=n?"#f39c12":"none"} stroke="#f39c12" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d={PATHS.star}/></svg>))}</div>}
+          </div>
+        </div>
+        {/* Quick add button always visible */}
+        <button onClick={()=>onAddToList(r)} title="Lägg till i inköpslistan" style={{height:36,padding:"0 12px",borderRadius:10,background:"#b8815a",color:"#fff",border:"none",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>+ Lista</button>
+        <span onClick={()=>setOpen(!open)} style={{color:"#c4bcaf",fontSize:18,cursor:"pointer",paddingTop:4}}>{open?"▾":"▸"}</span>
+      </div>
+      {open&&(
+        <div style={{padding:"0 16px 16px",borderTop:"0.5px solid #f2ede6"}}>
+          <div style={{marginBottom:12,marginTop:12}}>
+            {r.ingredients.map((ing,i)=>(
+              <div key={i} style={{fontSize:13,color:"#2c2420",padding:"3px 0",borderBottom:i<r.ingredients.length-1?"0.5px solid #f7f4ef":"none",display:"flex",justifyContent:"space-between"}}>
+                <span>{ing.name}</span>{ing.qty&&<span style={{color:"#9b9186"}}>{ing.qty}</span>}
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {r.url&&<a href={r.url} target="_blank" rel="noopener noreferrer" style={{height:36,padding:"0 12px",borderRadius:10,background:"#ede8e1",display:"flex",alignItems:"center",gap:6,textDecoration:"none",fontSize:12,color:"#6b6357"}}><Ic n="link" s={14} color="#6b6357"/> Öppna recept</a>}
+            <button onClick={()=>onEdit(r)} style={{height:36,padding:"0 12px",borderRadius:10,background:"#ede8e1",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#6b6357",fontFamily:"inherit"}}><Ic n="pencil" s={14} color="#6b6357"/> Redigera</button>
+            <button onClick={()=>onDelete(r.id)} style={{width:36,height:36,borderRadius:10,background:"#fdf0ee",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><Ic n="trash" s={16} color="#c0392b"/></button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Grocery(){
+  const [sub,setSub]=useState("list");
+  const [items,setItems]=useLS(KEYS.grocery,[{id:1,name:"Mjölk",qty:"2 st",person:"a",done:false},{id:2,name:"Pasta",qty:"500 g",person:"b",done:false}]);
+  const [recipes,setRecipes]=useLS(KEYS.recipes,[]);
+  const defaultCats=["Mejeri","Frukt & grönt","Kött & fisk","Torrvaror","Hygien","Hushåll","Övrigt"];
+  const [groceryCats,setGroceryCats]=useLS(KEYS.groceryCats,defaultCats);
+  const [f,setF]=useState({name:"",qty:"",person:"a",cat:""});
+  const [groceryTemplates,setGroceryTemplates]=useLS(KEYS.groceryTemplates,[]);
+  const [showTplMgr,setShowTplMgr]=useState(false);
+  const [editTpl,setEditTpl]=useState(null); // null | {id,name,items:[{name,qty,cat}]}
+  const [tplForm,setTplForm]=useState({name:"",items:[]});
+  const [tplItemRow,setTplItemRow]=useState({name:"",qty:"",cat:""});
+
+  const openNewTpl=()=>{setTplForm({name:"",items:[]});setTplItemRow({name:"",qty:"",cat:""});setEditTpl("new");};
+  const openEditTpl=(tpl)=>{setTplForm({name:tpl.name,items:tpl.items.map(i=>({...i}))});setTplItemRow({name:"",qty:"",cat:""});setEditTpl(tpl.id);};
+  const saveTpl=()=>{
+    if(!tplForm.name.trim()||tplForm.items.length===0)return;
+    if(editTpl==="new"){
+      setGroceryTemplates(prev=>[...prev,{id:Date.now(),name:tplForm.name.trim(),items:tplForm.items}]);
+    } else {
+      setGroceryTemplates(prev=>prev.map(t=>t.id===editTpl?{...t,name:tplForm.name.trim(),items:tplForm.items}:t));
+    }
+    setEditTpl(null);
+  };
+  const deleteTpl=(id)=>setGroceryTemplates(prev=>prev.filter(t=>t.id!==id));
+  const loadTpl=(tpl)=>{
+    const now=Date.now();
+    const newItems=tpl.items.map((it,i)=>({id:now+i,name:it.name,qty:it.qty||"",cat:it.cat||"",person:"a",done:false}));
+    setItems(prev=>[...prev,...newItems.filter(ni=>!prev.some(ex=>ex.name.toLowerCase()===ni.name.toLowerCase()))]);
+  };
+  const addTplItem=()=>{
+    if(!tplItemRow.name.trim())return;
+    setTplForm(prev=>({...prev,items:[...prev.items,{name:tplItemRow.name.trim(),qty:tplItemRow.qty.trim(),cat:tplItemRow.cat}]}));
+    setTplItemRow({name:"",qty:"",cat:""});
+  };
+  const removeTplItem=(i)=>setTplForm(prev=>({...prev,items:prev.items.filter((_,j)=>j!==i)}));
+  const nameRef=useRef(null);
+  const [showClearAll,setShowClearAll]=useState(false);
+  const [showRecipeForm,setShowRecipeForm]=useState(false);
+  const [editRecipe,setEditRecipe]=useState(null);
+  const [recipeFilter,setRecipeFilter]=useState({ambition:"",time:"",minRating:0});
+  const [showCatMgr,setShowCatMgr]=useState(false);
+  const [newCatName,setNewCatName]=useState("");
+  const [editItemId,setEditItemId]=useState(null);
+  const [editItemForm,setEditItemForm]=useState({name:"",qty:"",cat:""});
+
+  const toggle=id=>setItems(p=>p.map(i=>i.id===id?{...i,done:!i.done}:i));
+  const remove=id=>setItems(p=>p.filter(i=>i.id!==id));
+  const doneCount=items.filter(i=>i.done).length;
+  const add=()=>{
+    if(!f.name.trim())return;
+    setItems(p=>[...p,{id:Date.now(),name:f.name.trim(),qty:f.qty.trim(),person:f.person,cat:f.cat||"",done:false}]);
+    setF(p=>({...p,name:"",qty:""}));
+    setTimeout(()=>nameRef.current&&nameRef.current.focus(),10);
+  };
+  const addFromRecipe=r=>{
+    const now=Date.now();
+    setItems(p=>[...p,...r.ingredients.map((ing,i)=>({id:now+i,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false,recipeId:r.id,recipeName:r.title}))]);
+    setSub("list");
+  };
+  const saveRecipe=data=>{
+    if(editRecipe)setRecipes(prev=>prev.map(r=>r.id===editRecipe?{...r,...data}:r));
+    else setRecipes(prev=>[...prev,{id:Date.now(),...data}]);
+    setEditRecipe(null);
+  };
+
+  // Group: recipe items by recipe, free items by category
+  const recipeItemsByRecipe={};
+  const freeItemsByCat={};
+  items.forEach(i=>{
+    if(i.recipeId){
+      if(!recipeItemsByRecipe[i.recipeId])recipeItemsByRecipe[i.recipeId]={name:i.recipeName,items:[]};
+      recipeItemsByRecipe[i.recipeId].items.push(i);
+    } else {
+      const cat=i.cat||"";
+      if(!freeItemsByCat[cat])freeItemsByCat[cat]=[];
+      freeItemsByCat[cat].push(i);
+    }
+  });
+  // Sort: uncategorized first (""), then named cats
+  const catOrder=["", ...groceryCats];
+  const sortedCatEntries=Object.entries(freeItemsByCat).sort(([a],[b])=>{
+    const ai=catOrder.indexOf(a),bi=catOrder.indexOf(b);
+    return(ai===-1?999:ai)-(bi===-1?999:bi);
+  });
+
+  const filteredRecipes=recipes.filter(r=>{
+    if(recipeFilter.ambition&&r.ambition!==recipeFilter.ambition)return false;
+    if(recipeFilter.time&&r.time!==recipeFilter.time)return false;
+    if(recipeFilter.minRating&&(r.rating||0)<recipeFilter.minRating)return false;
+    return true;
+  });
+
+  const openEditItem=(it)=>{
+    setEditItemId(it.id);
+    setEditItemForm({name:it.name,qty:it.qty||"",cat:it.cat||""});
+  };
+  const saveEditItem=()=>{
+    if(!editItemForm.name.trim())return;
+    setItems(prev=>prev.map(i=>i.id===editItemId?{...i,name:editItemForm.name.trim(),qty:editItemForm.qty.trim(),cat:editItemForm.cat}:i));
+    setEditItemId(null);
+  };
+
+  const renderItem=(it,isLast)=>{
+    const p=PERSONS.find(p=>p.id===it.person);
+    const isEditing=editItemId===it.id;
+    if(isEditing) return(
+      <div key={it.id} style={{padding:"10px 14px",borderBottom:isLast?"none":"0.5px solid #f2ede6",background:"#faf8f5"}}>
+        <div style={{display:"flex",gap:6,marginBottom:8}}>
+          <input autoFocus style={{...inp,flex:3,fontSize:14,padding:"8px 10px"}} value={editItemForm.name}
+            onChange={e=>setEditItemForm({...editItemForm,name:e.target.value})}
+            onKeyDown={e=>e.key==="Enter"&&saveEditItem()}/>
+          <input style={{...inp,flex:1,fontSize:14,padding:"8px 8px",textAlign:"center",minWidth:60}} placeholder="Mängd" value={editItemForm.qty}
+            onChange={e=>setEditItemForm({...editItemForm,qty:e.target.value})}
+            onKeyDown={e=>e.key==="Enter"&&saveEditItem()}/>
+        </div>
+        <div style={{display:"flex",gap:5,marginBottom:8,flexWrap:"wrap"}}>
+          <button onClick={()=>setEditItemForm({...editItemForm,cat:""})} style={{padding:"3px 8px",borderRadius:12,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:editItemForm.cat===""?"#2c2420":"#ede8e1",color:editItemForm.cat===""?"#fff":"#6b6357",border:"none"}}>Ingen</button>
+          {groceryCats.map(c=>(<button key={c} onClick={()=>setEditItemForm({...editItemForm,cat:c===editItemForm.cat?"":c})} style={{padding:"3px 8px",borderRadius:12,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",background:editItemForm.cat===c?"#b8815a":"#ede8e1",color:editItemForm.cat===c?"#fff":"#6b6357"}}>{c}</button>))}
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <button onClick={saveEditItem} style={{flex:1,padding:"7px",borderRadius:10,background:"#2c2420",color:"#fff",border:"none",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>Spara</button>
+          <button onClick={()=>setEditItemId(null)} style={{flex:1,padding:"7px",borderRadius:10,background:"#ede8e1",color:"#6b6357",border:"none",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>Avbryt</button>
+        </div>
+      </div>
+    );
+    return(
+      <div key={it.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:isLast?"none":"0.5px solid #f2ede6",opacity:it.done?0.45:1,transition:"opacity .2s"}}>
+        <button onClick={()=>toggle(it.id)} style={{width:22,height:22,borderRadius:"50%",flexShrink:0,border:it.done?"none":"1.5px solid #d6d0c4",background:it.done?"#b8815a":"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:0}}>
+          {it.done&&<Ic n="check" s={13} color="#fff"/>}
+        </button>
+        <span onClick={()=>!it.done&&openEditItem(it)} style={{fontSize:15,color:"#2c2420",textDecoration:it.done?"line-through":"none",flex:1,cursor:it.done?"default":"pointer"}}>{it.name}</span>
+        {it.qty&&<span onClick={()=>!it.done&&openEditItem(it)} style={{fontSize:12,color:"#9b9186",flexShrink:0,cursor:it.done?"default":"pointer",background:"#f7f4ef",borderRadius:6,padding:"2px 6px"}}>{it.qty}</span>}
+        {!it.qty&&!it.done&&<button onClick={()=>openEditItem(it)} style={{fontSize:11,color:"#c4bcaf",background:"none",border:"none",cursor:"pointer",padding:"2px 4px",fontFamily:"inherit"}}>+ mängd</button>}
+        <Av p={p} s={22}/>
+        <button onClick={()=>remove(it.id)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2,flexShrink:0}}><Ic n="x" s={16}/></button>
+      </div>
+    );
+  };
+
+  if(sub==="recipes") return(
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <button onClick={()=>setSub("list")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Inköpslista</button>
+        <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Recept</button>
+      </div>
+      <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setShowRecipeForm(true);}}/>
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+          <span style={{fontSize:11,color:"#9b9186",alignSelf:"center"}}>Filtrera:</span>
+          {RECIPE_AMBITION.map(a=>(<button key={a.id} onClick={()=>setRecipeFilter(f=>({...f,ambition:f.ambition===a.id?"":a.id}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.ambition===a.id?a.bg:"#ede8e1",color:recipeFilter.ambition===a.id?a.color:"#6b6357",border:"none"}}>{a.label}</button>))}
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {RECIPE_TIME.map(t=>(<button key={t.id} onClick={()=>setRecipeFilter(f=>({...f,time:f.time===t.id?"":t.id}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.time===t.id?"#2c2420":"#ede8e1",color:recipeFilter.time===t.id?"#fff":"#6b6357",border:"none"}}>{t.label}</button>))}
+          {[3,4,5].map(n=>(<button key={n} onClick={()=>setRecipeFilter(f=>({...f,minRating:f.minRating===n?0:n}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.minRating===n?"#f39c12":"#ede8e1",color:recipeFilter.minRating===n?"#fff":"#6b6357",border:"none"}}>{"★".repeat(n)}+</button>))}
+        </div>
+      </div>
+      {filteredRecipes.length===0&&<Empty n="spark" text={recipes.length===0?"Spara ert första recept!":"Inga recept matchar filtret"}/>}
+      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} onAddToList={addFromRecipe} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
+      {showRecipeForm&&(
+        <Modal title={editRecipe?"Redigera recept":"Nytt recept"} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}>
+          <RecipeForm
+            initial={editRecipe?(()=>{const r=recipes.find(r=>r.id===editRecipe);return r?{...r,ingredientsText:(r.ingredients||[]).map(i=>i.qty?`${i.name}, ${i.qty}`:i.name).join("\n")}:null;})():null}
+            onSave={saveRecipe} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Inköpslista</button>
+        <button onClick={()=>setSub("recipes")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Recept {recipes.length>0&&`(${recipes.length})`}</button>
+      </div>
+      <SHdr title="Inköpslista">
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          {doneCount>0&&<button onClick={()=>setItems(items.filter(i=>!i.done))} style={{background:"none",border:"none",color:"#b8815a",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa {doneCount} avb.</button>}
+          {items.length>0&&<button onClick={()=>setShowClearAll(true)} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa allt</button>}
+          <button onClick={()=>setShowTplMgr(true)} title="Matmallar" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="template" s={18}/></button>
+          <button onClick={()=>setShowCatMgr(true)} title="Hantera kategorier" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="tag" s={18}/></button>
+        </div>
+      </SHdr>
+
+      {/* Inline add row */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
+        <div style={{display:"flex",gap:6,flex:"1 1 100%",alignItems:"center"}}>
+          <input ref={nameRef} style={{...inp,flex:3,fontSize:14,padding:"10px 12px"}} placeholder="Lägg till vara..." value={f.name} onChange={e=>setF({...f,name:e.target.value})} onKeyDown={e=>e.key==="Enter"&&add()}/>
+          <input style={{...inp,flex:1,fontSize:14,padding:"10px 8px",textAlign:"center",minWidth:52}} placeholder="Mängd" value={f.qty} onChange={e=>setF({...f,qty:e.target.value})} onKeyDown={e=>e.key==="Enter"&&add()}/>
+          {PERSONS.map(p=>(<button key={p.id} onClick={()=>setF({...f,person:p.id})} title={p.label} style={{width:36,height:36,borderRadius:10,border:f.person===p.id?`2px solid ${p.color}`:"2px solid transparent",background:f.person===p.id?p.bg:"#ede8e1",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:0}}><Av p={p} s={21}/></button>))}
+          <button onClick={add} style={{width:36,height:36,borderRadius:10,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
+        </div>
+        {/* Category row */}
+        <div style={{display:"flex",gap:5,flex:"1 1 100%",flexWrap:"wrap"}}>
+          <button onClick={()=>setF({...f,cat:""})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.cat===""?"#2c2420":"#ede8e1",color:f.cat===""?"#fff":"#6b6357",border:"none"}}>Ingen</button>
+          {groceryCats.map(c=>(<button key={c} onClick={()=>setF({...f,cat:c===f.cat?"":c})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.cat===c?"#b8815a":"#ede8e1",color:f.cat===c?"#fff":"#6b6357",border:"none"}}>{c}</button>))}
+        </div>
+      </div>
+
+      {items.length===0&&<Empty n="cart" text="Skriv en vara ovan och tryck Enter!"/>}
+
+      {/* Render free items grouped by category */}
+      {sortedCatEntries.map(([cat,catItems])=>(
+        <div key={cat||"__none"} style={{marginBottom:10}}>
+          {cat&&<div style={{fontSize:11,fontWeight:600,color:"#9b9186",marginBottom:5,letterSpacing:.5}}>{cat.toUpperCase()}</div>}
+          <Card>{catItems.map((it,i)=>renderItem(it,i===catItems.length-1))}</Card>
+        </div>
+      ))}
+
+      {/* Recipe groups */}
+      {Object.entries(recipeItemsByRecipe).map(([rid,group])=>(
+        <div key={rid} style={{marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <span style={{fontSize:12,fontWeight:600,color:"#b8815a"}}>🍽 {group.name}</span>
+            <button onClick={()=>setItems(items.filter(i=>String(i.recipeId)!==String(rid)))} style={{fontSize:11,color:"#c4bcaf",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Ta bort</button>
+          </div>
+          <Card>{group.items.map((it,i)=>renderItem(it,i===group.items.length-1))}</Card>
+        </div>
+      ))}
+
+      {showClearAll&&<ConfirmModal title="Rensa hela listan?" message="Alla varor tas bort permanent. Det går inte att ångra." confirmLabel="Ja, rensa allt" danger onConfirm={()=>setItems([])} onClose={()=>setShowClearAll(false)}/>}
+
+      {/* Template manager */}
+      {showTplMgr&&(
+        <Modal title="Matmallar" onClose={()=>setShowTplMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {groceryTemplates.length===0&&<div style={{textAlign:"center",color:"#9b9186",padding:"16px 0",fontSize:14}}>Inga mallar än. Skapa din första!</div>}
+            {groceryTemplates.map(tpl=>(
+              <div key={tpl.id} style={{background:"#f7f4ef",borderRadius:12,padding:"12px 14px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                  <span style={{flex:1,fontSize:14,fontWeight:500,color:"#2c2420"}}>{tpl.name}</span>
+                  <span style={{fontSize:11,color:"#9b9186"}}>{tpl.items.length} varor</span>
+                  <button onClick={()=>{openEditTpl(tpl);setShowTplMgr(false);}} style={{background:"none",border:"none",color:"#9b9186",cursor:"pointer",padding:2}}><Ic n="pencil" s={15}/></button>
+                  <button onClick={()=>deleteTpl(tpl.id)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="trash" s={15} color="#c0392b"/></button>
+                </div>
+                <div style={{fontSize:11,color:"#9b9186",marginBottom:8}}>{tpl.items.map(i=>i.name).join(", ")}</div>
+                <button onClick={()=>{loadTpl(tpl);setShowTplMgr(false);}} style={{width:"100%",padding:"8px",borderRadius:10,background:"#b8815a",color:"#fff",border:"none",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>+ Lägg till i listan</button>
+              </div>
+            ))}
+            <button onClick={()=>{setShowTplMgr(false);openNewTpl();}} style={{...btnP,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}><Ic n="plus" s={16} color="#fff"/> Ny mall</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Create / edit template modal */}
+      {editTpl!==null&&(
+        <Modal title={editTpl==="new"?"Ny mall":"Redigera mall"} onClose={()=>setEditTpl(null)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <input style={inp} placeholder="Mallnamn (t.ex. Basvaror, Frukost...)" value={tplForm.name}
+              onChange={e=>setTplForm(p=>({...p,name:e.target.value}))} autoFocus/>
+
+            {/* Existing items */}
+            {tplForm.items.length>0&&(
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {tplForm.items.map((it,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
+                    <span style={{flex:1,fontSize:13,color:"#2c2420"}}>{it.name}{it.qty&&<span style={{color:"#9b9186"}}> · {it.qty}</span>}{it.cat&&<span style={{color:"#b8815a"}}> · {it.cat}</span>}</span>
+                    <button onClick={()=>removeTplItem(i)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={15}/></button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add item row */}
+            <div style={{background:"#f7f4ef",borderRadius:12,padding:"10px 12px",display:"flex",flexDirection:"column",gap:8}}>
+              <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4}}>LÄGG TILL VARA</div>
+              <div style={{display:"flex",gap:6}}>
+                <input style={{...inp,flex:3,padding:"8px 10px",fontSize:13}} placeholder="Vara" value={tplItemRow.name}
+                  onChange={e=>setTplItemRow(p=>({...p,name:e.target.value}))}
+                  onKeyDown={e=>e.key==="Enter"&&addTplItem()}/>
+                <input style={{...inp,flex:1,padding:"8px 8px",fontSize:13,textAlign:"center",minWidth:56}} placeholder="Mängd" value={tplItemRow.qty}
+                  onChange={e=>setTplItemRow(p=>({...p,qty:e.target.value}))}
+                  onKeyDown={e=>e.key==="Enter"&&addTplItem()}/>
+              </div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                <button onClick={()=>setTplItemRow(p=>({...p,cat:""}))} style={{padding:"3px 8px",borderRadius:12,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:tplItemRow.cat===""?"#2c2420":"#ede8e1",color:tplItemRow.cat===""?"#fff":"#6b6357",border:"none"}}>Ingen</button>
+                {groceryCats.map(c=>(<button key={c} onClick={()=>setTplItemRow(p=>({...p,cat:p.cat===c?"":c}))} style={{padding:"3px 8px",borderRadius:12,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",background:tplItemRow.cat===c?"#b8815a":"#ede8e1",color:tplItemRow.cat===c?"#fff":"#6b6357"}}>{c}</button>))}
+              </div>
+              <button onClick={addTplItem} style={{...btnP,padding:"8px"}}><Ic n="plus" s={15} color="#fff"/> Lägg till vara</button>
+            </div>
+
+            <button onClick={saveTpl} disabled={!tplForm.name.trim()||tplForm.items.length===0}
+              style={{...btnP,opacity:(!tplForm.name.trim()||tplForm.items.length===0)?0.4:1}}>
+              {editTpl==="new"?"Spara mall":"Uppdatera mall"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Category manager */}
+      {showCatMgr&&(
+        <Modal title="Kategorier" onClose={()=>setShowCatMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {groceryCats.map((c,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"9px 12px"}}>
+                  <span style={{flex:1,fontSize:14,color:"#2c2420"}}>{c}</span>
+                  <button onClick={()=>setGroceryCats(groceryCats.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <input style={{...inp,flex:1}} placeholder="Ny kategori…" value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&newCatName.trim()&&(setGroceryCats([...groceryCats,newCatName.trim()]),setNewCatName(""))}/>
+              <button onClick={()=>{if(newCatName.trim()){setGroceryCats([...groceryCats,newCatName.trim()]);setNewCatName("");}}} style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── TODO ─────────────────────────────────────────────────────────────────────
+const BUCKETS=[
+  {id:"today",label:"Prioriterat",color:"#c0392b",bg:"#fdf0ee"},
+  {id:"soon",label:"Mellan",color:"#b8815a",bg:"#fbeee6"},
+  {id:"project",label:"Långsiktigt",color:"#7b7cb8",bg:"#eef0f8"},
+  {id:"someday",label:"Pausat",color:"#9b9186",bg:"#ede8e1"},
+];
+const TODO_TAGS_DEFAULT=[
+  {id:"hem",label:"Hem",color:"#5a8c5a",bg:"#e8f0e8"},
+  {id:"admin",label:"Admin",color:"#4a5a8c",bg:"#eef0f8"},
+  {id:"kul",label:"Kul",color:"#b8815a",bg:"#fbeee6"},
+  {id:"barn",label:"Barn",color:"#2980b9",bg:"#e8f4fb"},
+];
+const TODO_STATUS=[
+  {id:"open",label:"Att göra"},{id:"in_progress",label:"Påbörjad"},
+  {id:"waiting",label:"Väntar"},{id:"done",label:"Klar"},
+];
+const statusStyle={
+  open:{color:"#9b9186",bg:"transparent",border:"1.5px solid #d6d0c4"},
+  in_progress:{color:"#5a8c5a",bg:"#e8f0e8",border:"1.5px solid #5a8c5a44"},
+  waiting:{color:"#b8815a",bg:"#fbeee6",border:"1.5px solid #b8815a44"},
+  done:{color:"#5a8c5a",bg:"#5a8c5a",border:"none"},
+};
+
+function Todo({viewerId}){
+  const [todoTags,setTodoTags]=useLS("peas_todo_tags",TODO_TAGS_DEFAULT);
+  const TODO_TAGS=todoTags;
+  const [showTagMgr,setShowTagMgr]=useState(false);
+  const [newTagForm,setNewTagForm]=useState({label:"",color:"#5a8c5a",bg:"#e8f0e8"});
+  const TAG_COLORS=[
+    {c:"#5a8c5a",b:"#e8f0e8"},{c:"#4a5a8c",b:"#eef0f8"},{c:"#b8815a",b:"#fbeee6"},
+    {c:"#2980b9",b:"#e8f4fb"},{c:"#c0392b",b:"#fdf0ee"},{c:"#9b9186",b:"#ede8e1"},
+  ];
+  const [items,setItems]=useLS(KEYS.todo,[
+    {id:1,text:"Boka tandläkare",tag:"admin",person:"b",bucket:"soon",status:"open"},
+    {id:2,text:"Serva cykeln",tag:"hem",person:"a",bucket:"someday",status:"open"},
+    {id:4,text:"Ansökt om förskola",tag:"barn",person:"a",bucket:"project",status:"waiting",waitingFor:"Svar från förskolan"},
+  ]);
+  const [show,setShow]=useState(false);
+  const [editItem,setEditItem]=useState(null);
+  const ef={text:"",tag:"hem",person:null,bucket:"soon",status:"open",waitingFor:"",dueDate:"",hiddenFrom:null};
+  const [f,setF]=useState(ef);
+  const [activeBucket,setActiveBucket]=useState("all");
+  const visible=filterTodosForViewer(items,viewerId);
+
+  const save=()=>{
+    if(!f.text.trim())return;
+    const payload={...f,person:f.person||null,hiddenFrom:f.hiddenFrom||null,dueDate:f.dueDate||null};
+    if(editItem){setItems(items.map(i=>i.id===editItem?{...i,...payload}:i));setEditItem(null);}
+    else setItems([...items,{id:Date.now(),...payload}]);
+    setF(ef);setShow(false);
+  };
+  const openEdit=it=>{setF({text:it.text,tag:it.tag,person:it.person||null,bucket:it.bucket,status:it.status,waitingFor:it.waitingFor||"",dueDate:it.dueDate||"",hiddenFrom:it.hiddenFrom||null});setEditItem(it.id);setShow(true);};
+  const cycleStatus=it=>{const order=["open","in_progress","waiting","done"];const next=order[(order.indexOf(it.status)+1)%order.length];setItems(items.map(i=>i.id===it.id?{...i,status:next}:i));};
+  const remove=id=>setItems(items.filter(i=>i.id!==id));
+  const shown=activeBucket==="all"?visible.filter(i=>i.status!=="done"):activeBucket==="done"?visible.filter(i=>i.status==="done"):visible.filter(i=>i.bucket===activeBucket&&i.status!=="done");
+
+  return(
+    <div>
+      <SHdr title="Att göra" onAdd={()=>{setEditItem(null);setF(ef);setShow(true);}}>
+        <button onClick={()=>setShowTagMgr(true)} title="Hantera kategorier" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="tag" s={18}/></button>
+      </SHdr>
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {[{id:"all",label:"Alla öppna",color:"#2c2420"},...BUCKETS,{id:"done",label:"Klart",color:"#5a8c5a"}].map(b=>(
+          <button key={b.id} onClick={()=>setActiveBucket(b.id)} style={{padding:"6px 12px",borderRadius:20,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:activeBucket===b.id?b.color:"#ede8e1",color:activeBucket===b.id?"#fff":"#6b6357",border:"none",fontWeight:activeBucket===b.id?500:400}}>
+            {b.label} <span style={{marginLeft:2,opacity:.7,fontSize:11}}>{b.id==="all"?visible.filter(i=>i.status!=="done").length:b.id==="done"?visible.filter(i=>i.status==="done").length:visible.filter(i=>i.bucket===b.id&&i.status!=="done").length}</span>
+          </button>
+        ))}
+      </div>
+      {shown.length===0&&<Empty n="todo" text="Ingenting här!"/>}
+      <Card>
+        {shown.map((it,i)=>{
+          const tag=TODO_TAGS.find(t=>t.id===it.tag);const p=PERSONS.find(p=>p.id===it.person);
+          const bkt=BUCKETS.find(b=>b.id===it.bucket);const ss=statusStyle[it.status]||statusStyle.open;
+          return(
+            <div key={it.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"12px 14px",borderBottom:i<shown.length-1?"0.5px solid #f2ede6":"none"}}>
+              <button onClick={()=>cycleStatus(it)} title="Byt status" style={{width:22,height:22,borderRadius:it.status==="done"?"50%":6,flexShrink:0,marginTop:2,border:ss.border,background:ss.bg,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:0}}>
+                {it.status==="done"&&<Ic n="check" s={12} color="#fff"/>}
+                {it.status==="waiting"&&<span style={{fontSize:9,fontWeight:700,color:"#b8815a"}}>…</span>}
+                {it.status==="in_progress"&&<span style={{fontSize:8,fontWeight:700,color:"#5a8c5a"}}>▶</span>}
+              </button>
+              <div style={{flex:1,minWidth:0}} onClick={()=>openEdit(it)}>
+                <div style={{fontSize:15,color:"#2c2420",textDecoration:it.status==="done"?"line-through":"none",opacity:it.status==="done"?0.5:1,cursor:"pointer"}}>{it.text}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                  {tag&&<span style={{fontSize:11,padding:"2px 7px",borderRadius:6,background:tag.bg,color:tag.color,fontWeight:500}}>{tag.label}</span>}
+                  {bkt&&it.status!=="done"&&<span style={{fontSize:11,padding:"2px 7px",borderRadius:6,background:bkt.bg,color:bkt.color}}>{bkt.label}</span>}
+                  {it.dueDate&&<span style={{fontSize:11,color:it.dueDate<TODAY?"#c0392b":"#9b9186"}}>⏰ {it.dueDate}</span>}
+                  {it.status==="waiting"&&it.waitingFor&&<span style={{fontSize:11,color:"#b8815a",fontStyle:"italic"}}>⏳ {it.waitingFor}</span>}
+                  {todoVisibility(viewerId,it.hiddenFrom)==="me"&&<span style={{fontSize:10,background:"#ede8e1",color:"#6b6357",padding:"2px 6px",borderRadius:6}}>Bara mig</span>}
+                </div>
+              </div>
+              {p?<Av p={p} s={22}/>:<span style={{fontSize:10,color:"#c4bcaf"}}>—</span>}
+              <button onClick={()=>remove(it.id)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2,marginTop:2}}><Ic n="x" s={16}/></button>
+            </div>
+          );
+        })}
+      </Card>
+      {showTagMgr&&(
+        <Modal title="Kategorier" onClose={()=>setShowTagMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:12,color:"#9b9186"}}>Tryck på en kategori för att byta namn eller färg.</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {TODO_TAGS.map(tag=>(
+                <div key={tag.id} style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
+                  <div style={{width:12,height:12,borderRadius:"50%",background:tag.color,flexShrink:0}}/>
+                  <input style={{...inp,flex:1,fontSize:13,padding:"6px 10px"}} value={tag.label}
+                    onChange={e=>setTodoTags(todoTags.map(t=>t.id===tag.id?{...t,label:e.target.value}:t))}/>
+                  <div style={{display:"flex",gap:4}}>
+                    {TAG_COLORS.map(({c,b})=>(
+                      <button key={c} onClick={()=>setTodoTags(todoTags.map(t=>t.id===tag.id?{...t,color:c,bg:b}:t))}
+                        style={{width:20,height:20,borderRadius:"50%",background:c,border:tag.color===c?"2.5px solid #2c2420":"2.5px solid transparent",cursor:"pointer",padding:0}}/>
+                    ))}
+                  </div>
+                  <button onClick={()=>setTodoTags(todoTags.filter(t=>t.id!==tag.id))}
+                    style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={15}/></button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <input style={{...inp,flex:1}} placeholder="Ny kategori…" value={newTagForm.label}
+                onChange={e=>setNewTagForm({...newTagForm,label:e.target.value})}
+                onKeyDown={e=>{if(e.key==="Enter"&&newTagForm.label.trim()){
+                  setTodoTags([...todoTags,{id:Date.now().toString(),...newTagForm,label:newTagForm.label.trim()}]);
+                  setNewTagForm({label:"",color:"#5a8c5a",bg:"#e8f0e8"});
+                }}}/>
+              <button onClick={()=>{if(!newTagForm.label.trim())return;setTodoTags([...todoTags,{id:Date.now().toString(),...newTagForm,label:newTagForm.label.trim()}]);setNewTagForm({label:"",color:"#5a8c5a",bg:"#e8f0e8"});}}
+                style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:0}}>
+                <Ic n="plus" s={18}/>
+              </button>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {TAG_COLORS.map(({c,b})=>(
+                <button key={c} onClick={()=>setNewTagForm({...newTagForm,color:c,bg:b})}
+                  style={{width:26,height:26,borderRadius:"50%",background:c,border:newTagForm.color===c?"3px solid #2c2420":"3px solid transparent",cursor:"pointer",padding:0}}/>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {show&&(
+        <Modal title={editItem?"Redigera uppgift":"Ny uppgift"} onClose={()=>{setShow(false);setEditItem(null);}}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <input style={inp} placeholder="Vad ska göras?" value={f.text} onChange={e=>setF({...f,text:e.target.value})} onKeyDown={e=>e.key==="Enter"&&save()} autoFocus/>
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Prioritet</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {BUCKETS.map(b=>(<button key={b.id} onClick={()=>setF({...f,bucket:b.id})} style={{padding:"9px 10px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",background:f.bucket===b.id?b.bg:"#f7f4ef",color:f.bucket===b.id?b.color:"#6b6357",border:f.bucket===b.id?`1.5px solid ${b.color}55`:"1.5px solid transparent",fontWeight:f.bucket===b.id?500:400}}>{b.label}</button>))}
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Status</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {TODO_STATUS.map(s=>(<button key={s.id} onClick={()=>setF({...f,status:s.id})} style={{padding:"8px 4px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.status===s.id?"#e8f0e8":"#ede8e1",color:f.status===s.id?"#3a6b3a":"#6b6357",border:f.status===s.id?"1.5px solid #5a8c5a44":"1.5px solid transparent"}}>{s.label}</button>))}
+              </div>
+            </div>
+            {f.status==="waiting"&&<input style={inp} placeholder="Väntar på vad?" value={f.waitingFor} onChange={e=>setF({...f,waitingFor:e.target.value})}/>}
+            <div><div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Deadline (valfritt)</div><input style={inp} type="date" value={f.dueDate||""} onChange={e=>setF({...f,dueDate:e.target.value})}/></div>
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Kategori</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {TODO_TAGS.map(t=>(<button key={t.id} onClick={()=>setF({...f,tag:t.id})} style={{padding:"7px 12px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.tag===t.id?t.bg:"#ede8e1",color:f.tag===t.id?t.color:"#6b6357",border:f.tag===t.id?`1.5px solid ${t.color}44`:"1.5px solid transparent",fontWeight:f.tag===t.id?500:400}}>{t.label}</button>))}
+              </div>
+            </div>
+            <PPick val={f.person} onChange={v=>setF({...f,person:v})} label="Vem ansvarar?" allowNone/>
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Synlighet</div>
+              <div style={{display:"flex",gap:8}}>
+                {(()=>{const partner=viewerId==="a"?"b":"a";const vis=todoVisibility(viewerId,f.hiddenFrom);return(<>
+                  <button onClick={()=>setF({...f,hiddenFrom:partner})} style={{flex:1,padding:"10px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",background:vis==="me"?"#fbeee6":"#ede8e1",color:vis==="me"?"#b8815a":"#6b6357",border:vis==="me"?"1.5px solid #b8815a44":"1.5px solid transparent",fontWeight:vis==="me"?500:400}}>Bara mig</button>
+                  <button onClick={()=>setF({...f,hiddenFrom:null})} style={{flex:1,padding:"10px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",background:vis==="both"?"#e8f0e8":"#ede8e1",color:vis==="both"?"#3a6b3a":"#6b6357",border:vis==="both"?"1.5px solid #5a8c5a44":"1.5px solid transparent",fontWeight:vis==="both"?500:400}}>Båda</button>
+                </>);})()}
+              </div>
+            </div>
+            <button style={btnP} onClick={save}>{editItem?"Spara ändringar":"Lägg till"}</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── EXPIRY ───────────────────────────────────────────────────────────────────
+function ExpiryPanel(){
+  const [items,setItems]=useLS(KEYS.expiry,[{id:1,title:"Sonens pass",expires:"2028-07-25",remind:"6m",remindDays:180,icon:"🛂"}]);
+  const [show,setShow]=useState(false);
+  const [f,setF]=useState({title:"",expires:"",remind:"3m",remindDays:null,icon:"📋"});
+  const save=()=>{
+    if(!f.title.trim()||!f.expires)return;
+    const days=f.remind==="custom"?parseInt(f.remindDays,10):(REMIND_OPTS.find(r=>r.id===f.remind)?.days??30);
+    setItems([...items,{id:Date.now(),title:f.title.trim(),expires:f.expires,remind:f.remind,remindDays:days,icon:f.icon}]);
+    setF({title:"",expires:"",remind:"3m",remindDays:null,icon:"📋"});setShow(false);
+  };
+  return(
+    <div>
+      <SHdr title="Påminnelser" onAdd={()=>setShow(true)}/>
+      {items.length===0&&<Empty n="bell" text="Lägg till pass, försäkringar, licenser…"/>}
+      <Card>
+        {items.map((ex,i)=>{const due=expiryAlertDate(ex);return(
+          <div key={ex.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:i<items.length-1?"0.5px solid #f2ede6":"none"}}>
+            <span style={{fontSize:18}}>{ex.icon||"📋"}</span>
+            <div style={{flex:1}}><div style={{fontSize:14,color:"#2c2420"}}>{ex.title}</div><div style={{fontSize:11,color:"#9b9186"}}>Utgår {ex.expires} · påminn {ex.remindDays} dagar innan</div></div>
+            {due&&<span style={{fontSize:10,background:"#fff3cd",color:"#b8600d",padding:"2px 8px",borderRadius:6}}>Snart</span>}
+            <button onClick={()=>setItems(items.filter(x=>x.id!==ex.id))} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
+          </div>
+        );})}
+      </Card>
+      {show&&(
+        <Modal title="Nytt förfallodatum" onClose={()=>setShow(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <input style={inp} placeholder="T.ex. Sonens pass" value={f.title} onChange={e=>setF({...f,title:e.target.value})} autoFocus/>
+            <input style={inp} type="date" value={f.expires} onChange={e=>setF({...f,expires:e.target.value})}/>
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Påminn i förväg</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                {REMIND_OPTS.map(r=>(<button key={r.id} onClick={()=>setF({...f,remind:r.id,remindDays:r.days})} style={{padding:"7px 12px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.remind===r.id?"#fbeee6":"#ede8e1",color:f.remind===r.id?"#b8815a":"#6b6357",border:f.remind===r.id?"1.5px solid #b8815a44":"1.5px solid transparent"}}>{r.label}</button>))}
+              </div>
+            </div>
+            {f.remind==="custom"&&<input style={inp} type="number" placeholder="Antal dagar innan" value={f.remindDays||""} onChange={e=>setF({...f,remindDays:e.target.value})}/>}
+            <button style={btnP} onClick={save}>Spara</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── CALENDAR ─────────────────────────────────────────────────────────────────
+const ECOLS=["#b8815a","#5a8c5a","#7b7cb8","#c0392b","#2980b9"];
+const RECURRENCE_OPTS=[
+  {id:"none",label:"Ingen upprepning"},
+  {id:"daily",label:"Varje dag"},
+  {id:"weekly",label:"Varje vecka"},
+  {id:"monthly",label:"Varje månad"},
+  {id:"yearly",label:"Varje år"},
+];
+
+function Calendar(){
+  const today=new Date();
+  const [vd,setVd]=useState(new Date(today.getFullYear(),today.getMonth(),1));
+  const todayStr=fmt(today);
+  const [sub,setSub]=useState("cal");
+  const [userEvents,setUserEvents]=useLS(KEYS.events,[
+    {id:1,title:"Middag hos föräldrarna",date:fmt(new Date(today.getFullYear(),today.getMonth(),5)),person:"both",color:"#b8815a",recurrence:"none"},
+    {id:2,title:"Yoga",date:fmt(new Date(today.getFullYear(),today.getMonth(),8)),person:"b",color:"#5a8c5a",time:"18:00",endTime:"19:00",recurrence:"none"},
+  ]);
+  const [expiryItems]=useLS(KEYS.expiry,[]);
+  const [show,setShow]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [sel,setSel]=useState(null);
+  const [showMonthPicker,setShowMonthPicker]=useState(false);
+  const [pickerYear,setPickerYear]=useState(()=>new Date().getFullYear());
+
+  const yr=vd.getFullYear(),mo=vd.getMonth();
+  const monthStart=fmt(new Date(yr,mo,1));
+  const monthEnd=fmt(new Date(yr,mo+1,0));
+  const FAR=addDaysStr(todayStr,5475);
+
+  const expandedUser=expandRecurringUserEvents(expandMultiDayEvents(userEvents),monthStart,FAR);
+  const allEvents=[...expandedUser,...expiryToCalendarEvents(expiryItems)];
+
+  const startOff=(new Date(yr,mo,1).getDay()+6)%7;
+  const days=new Date(yr,mo+1,0).getDate();
+  const prevDays=new Date(yr,mo,0).getDate();
+  const evFor=ds=>allEvents.filter(e=>e.date===ds);
+  const upcoming=[...allEvents].filter(e=>e.date>=todayStr).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,12);
+
+  const dayLabel=ds=>{
+    const d=new Date(ds+"T00:00:00");const diff=Math.round((d-today)/86400000);
+    if(diff===0)return"Idag";if(diff===1)return"Imorgon";
+    return["Sön","Mån","Tis","Ons","Tor","Fre","Lör"][d.getDay()]+" "+d.getDate()+"/"+(d.getMonth()+1);
+  };
+
+  const emptyF=()=>({title:"",date:sel||todayStr,endDate:"",person:"both",color:"#b8815a",time:"",endTime:"",allDay:false,recurrence:"none",note:""});
+  const [f,setF]=useState(emptyF());
+
+  const openNew=()=>{setEditId(null);setF(emptyF());setShow(true);};
+  const openEdit=ev=>{
+    if(ev.isExpiry)return;
+    // For recurring instances, find and edit the base event
+    const baseId=ev._recurInstance?ev._recurBase:ev.id;
+    const orig=userEvents.find(e=>e.id===baseId)||userEvents.find(e=>e.id===ev.id);
+    if(!orig)return;
+    setEditId(orig.id);
+    setF({title:orig.title,date:orig.date,endDate:orig.endDate||"",person:orig.person,color:orig.color,
+      time:orig.time||"",endTime:orig.endTime||"",allDay:orig.allDay||false,
+      recurrence:orig.recurrence||"none",note:orig.note||""});
+    setShow(true);
+  };
+  const closeModal=()=>{setShow(false);setEditId(null);};
+
+  const saveEv=()=>{
+    if(!f.title.trim())return;
+    const time=f.allDay?null:normalizeTime(f.time);
+    const endTime=f.allDay?null:normalizeTime(f.endTime);
+    const payload={
+      ...f,title:f.title.trim(),
+      time,endTime,
+      endDate:(!f.allDay&&f.endDate&&f.endDate>f.date)?f.endDate:null,
+      allDay:f.allDay,
+      recurrence:f.recurrence||"none",
+      note:f.note||""
+    };
+    if(editId)setUserEvents(userEvents.map(e=>e.id===editId?{...e,...payload}:e));
+    else setUserEvents([...userEvents,{id:Date.now(),...payload}]);
+    closeModal();
+  };
+  const [showDelConfirm,setShowDelConfirm]=useState(false);
+  const isRecurringEdit=editId&&userEvents.find(e=>e.id===editId)?.recurrence&&userEvents.find(e=>e.id===editId)?.recurrence!=="none";
+  const deleteEv=(id,mode)=>{
+    if(mode==="single"&&isRecurringEdit){
+      // Add this date to the event's exceptions list
+      setUserEvents(userEvents.map(e=>e.id===id?{...e,exceptions:[...(e.exceptions||[]),f.date]}:e));
+    } else {
+      setUserEvents(userEvents.filter(e=>e.id!==id));
+    }
+    closeModal();setShowDelConfirm(false);
+  };
+
+  if(sub==="expiry") return(
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <button onClick={()=>setSub("cal")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Kalender</button>
+        <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Påminnelser</button>
+      </div>
+      <ExpiryPanel/>
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Kalender</button>
+        <button onClick={()=>setSub("expiry")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Påminnelser</button>
+      </div>
+      <SHdr title="Kalender" onAdd={openNew}/>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <button onClick={()=>setVd(new Date(yr,mo-1,1))} style={{background:"none",border:"none",cursor:"pointer",color:"#6b6357",padding:4}}><Ic n="chevL" s={20}/></button>
+        <button onClick={()=>setShowMonthPicker(!showMonthPicker)} style={{fontFamily:"'DM Serif Display',serif",fontSize:17,color:"#2c2420",background:"none",border:"none",cursor:"pointer",padding:"4px 8px",borderRadius:8}}>
+          {MONTHS[mo]} {yr} ▾
+        </button>
+        <button onClick={()=>setVd(new Date(yr,mo+1,1))} style={{background:"none",border:"none",cursor:"pointer",color:"#6b6357",padding:4}}><Ic n="chevR" s={20}/></button>
+      </div>
+      {showMonthPicker&&(
+        <div style={{background:"#fff",borderRadius:16,border:"0.5px solid #e2ddd6",padding:16,marginBottom:12,boxShadow:"0 4px 20px rgba(0,0,0,0.08)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <button onClick={()=>setPickerYear(y=>y-1)} style={{background:"none",border:"none",cursor:"pointer",color:"#6b6357",padding:4}}><Ic n="chevL" s={18}/></button>
+            <span style={{fontWeight:600,color:"#2c2420"}}>{pickerYear}</span>
+            <button onClick={()=>setPickerYear(y=>y+1)} style={{background:"none",border:"none",cursor:"pointer",color:"#6b6357",padding:4}}><Ic n="chevR" s={18}/></button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+            {MONTHS.map((m,i)=>(
+              <button key={i} onClick={()=>{setVd(new Date(pickerYear,i,1));setShowMonthPicker(false);}}
+                style={{padding:"7px 4px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",border:"none",
+                  background:pickerYear===yr&&i===mo?"#b8815a":"#f7f4ef",
+                  color:pickerYear===yr&&i===mo?"#fff":"#2c2420",
+                  fontWeight:pickerYear===yr&&i===mo?600:400}}>
+                {m.slice(0,3)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:14}}>
+        {WEEKDAYS_SHORT.map(d=>(<div key={d} style={{textAlign:"center",fontSize:10,color:"#9b9186",padding:"4px 0",fontWeight:500}}>{d}</div>))}
+        {Array.from({length:startOff}).map((_,i)=>(<div key={"p"+i} style={{padding:"6px 0",textAlign:"center",fontSize:12,color:"#d6d0c4"}}>{prevDays-startOff+i+1}</div>))}
+        {Array.from({length:days}).map((_,i)=>{
+          const day=i+1;
+          const ds=`${yr}-${String(mo+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+          const isToday=ds===todayStr,evs=evFor(ds),isSel=sel===ds,conflict=hasDayConflict(evs);
+          return(
+            <div key={day} onClick={()=>setSel(isSel?null:ds)} style={{padding:"5px 0",textAlign:"center",fontSize:12,cursor:"pointer",borderRadius:8,position:"relative",background:isToday?"#b8815a":"transparent",color:isToday?"#fff":"#2c2420",fontWeight:isToday||isSel?600:400,outline:isSel&&!isToday?"2.5px solid #b8815a":"none",outlineOffset:"-2px"}}>
+              {day}
+              {(conflict||isHighLoad(evs))&&!isToday&&<div style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:conflict?"#e74c3c":"#f39c12"}}/>}
+              {evs.length>0&&<div style={{position:"absolute",bottom:2,left:"50%",transform:"translateX(-50%)",display:"flex",gap:2}}>{evs.slice(0,3).map((ev,ei)=>(<div key={ei} style={{width:4,height:4,borderRadius:"50%",background:isToday?"#fff":ev.color}}/>))}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {sel&&(
+        <Card style={{marginBottom:12}}>
+          {(()=>{const c=hasDayConflict(evFor(sel)),h=isHighLoad(evFor(sel));return(c||h)&&<div style={{padding:"8px 14px",background:"#fff3cd",fontSize:12,color:"#7a4400",borderBottom:"0.5px solid #f2ede6"}}>⚠️ {c?"Tidskonflikt":"Mycket på schemat"}</div>;})()}
+          {evFor(sel).length===0?(
+            <div style={{padding:"16px 14px",textAlign:"center"}}>
+              <div style={{fontSize:13,color:"#9b9186",marginBottom:10}}>Inga händelser</div>
+              <button onClick={()=>{setF({...emptyF(),date:sel});setEditId(null);setShow(true);}} style={{fontSize:13,color:"#b8815a",background:"#fbeee6",border:"none",borderRadius:10,padding:"8px 14px",cursor:"pointer",fontFamily:"inherit"}}>+ Lägg till</button>
+            </div>
+          ):evFor(sel).map((ev,i,a)=>{
+            const p=ev.person==="both"?null:PERSONS.find(p=>p.id===ev.person);
+            const editable=!ev.isExpiry&&!ev.isPickup&&!ev.isActivity;
+            return(
+              <div key={ev.id+i} onClick={()=>editable&&openEdit(ev)} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"12px 14px",borderBottom:i<a.length-1?"0.5px solid #f2ede6":"none",cursor:editable?"pointer":"default"}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:ev.color,flexShrink:0,marginTop:4}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,color:"#2c2420"}}>{ev.title}{ev._multiDay?" 📅":""}{ev._recurInstance?" 🔁":""}</div>
+                  <div style={{fontSize:11,color:"#9b9186"}}>{fmtEvTime(ev)}</div>
+                  {ev.note&&<div style={{fontSize:12,color:"#6b6357",marginTop:2,fontStyle:"italic"}}>{ev.note}</div>}
+                </div>
+                {ev.isExpiry&&<span style={{fontSize:10,background:"#fdebd0",color:"#d35400",padding:"2px 6px",borderRadius:6}}>Påminnelser</span>}
+                {ev.recurring&&<span style={{fontSize:10,background:"#fbeee6",color:"#b8815a",padding:"2px 6px",borderRadius:6}}>Återk.</span>}
+                {p?<Av p={p} s={22}/>:<span style={{fontSize:11,color:"#9b9186"}}>Båda</span>}
+                {editable&&<Ic n="pencil" s={16} color="#c4bcaf"/>}
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:10,fontWeight:500}}>Kommande</div>
+      {upcoming.length===0&&<Empty n="cal" text="Inga kommande händelser"/>}
+      <Card>
+        {upcoming.map((ev,i)=>{
+          const p=ev.person==="both"?null:PERSONS.find(p=>p.id===ev.person);const editable=!ev.isExpiry&&!ev.isPickup&&!ev.isActivity;
+          return(
+            <div key={ev.id+(ev._multiDay?ev.date:"")+(ev._recurInstance?ev.date:"")} onClick={()=>editable&&openEdit(ev)} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",borderBottom:i<upcoming.length-1?"0.5px solid #f2ede6":"none",cursor:editable?"pointer":"default"}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:ev.color,flexShrink:0,marginTop:4}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,color:"#2c2420"}}>{ev.title}{ev._multiDay&&!ev._multiFirst?" (forts.)":""}</div>
+                <div style={{fontSize:11,color:"#9b9186"}}>{dayLabel(ev.date)}{fmtEvTime(ev)?` · ${fmtEvTime(ev)}`:""}</div>
+                {ev.note&&<div style={{fontSize:11,color:"#6b6357",fontStyle:"italic"}}>{ev.note}</div>}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end"}}>
+                {ev.isExpiry&&<span style={{fontSize:10,background:"#fdebd0",color:"#d35400",padding:"2px 6px",borderRadius:6}}>Påminnelser</span>}
+                {ev.recurring&&<span style={{fontSize:10,background:"#fbeee6",color:"#b8815a",padding:"2px 6px",borderRadius:6}}>Återk.</span>}
+                {ev._recurInstance&&<span style={{fontSize:10,background:"#e8f0e8",color:"#5a8c5a",padding:"2px 6px",borderRadius:6}}>🔁</span>}
+                {ev._multiDay&&<span style={{fontSize:10,background:"#eef0f8",color:"#4a5a8c",padding:"2px 6px",borderRadius:6}}>Flerdag</span>}
+                {p?<Av p={p} s={20}/>:<span style={{fontSize:10,color:"#9b9186"}}>Båda</span>}
+              </div>
+            </div>
+          );
+        })}
+      </Card>
+
+      {show&&(
+        <Modal title={editId?"Redigera händelse":"Ny händelse"} onClose={closeModal}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <input style={inp} placeholder="Vad händer?" value={f.title} onChange={e=>setF({...f,title:e.target.value})} autoFocus/>
+
+            {/* All day toggle */}
+            <div style={{display:"flex",alignItems:"center",gap:10,background:"#f7f4ef",borderRadius:12,padding:"10px 14px"}}>
+              <input type="checkbox" id="allday" checked={f.allDay} onChange={e=>setF({...f,allDay:e.target.checked})} style={{width:18,height:18,cursor:"pointer"}}/>
+              <label htmlFor="allday" style={{fontSize:14,color:"#2c2420",cursor:"pointer"}}>Hela dagen</label>
+            </div>
+
+            <div style={{display:"flex",gap:8}}>
+              <div style={{flex:1}}><div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Startdatum</div><input style={inp} type="date" value={f.date} onChange={e=>setF({...f,date:e.target.value})}/></div>
+              <div style={{flex:1}}><div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Slutdatum (valfritt)</div><input style={inp} type="date" value={f.endDate||""} min={f.date} onChange={e=>setF({...f,endDate:e.target.value})}/></div>
+            </div>
+
+            {!f.allDay&&(
+              <div style={{display:"flex",gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Starttid (t.ex. 9 eller 09:00)</div>
+                  <input style={inp} type="text" placeholder="09:00" value={f.time} onChange={e=>setF({...f,time:e.target.value})} onBlur={e=>setF({...f,time:normalizeTime(e.target.value)||""})}/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Sluttid</div>
+                  <input style={inp} type="text" placeholder="10:00" value={f.endTime} onChange={e=>setF({...f,endTime:e.target.value})} onBlur={e=>setF({...f,endTime:normalizeTime(e.target.value)||""})}/>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Vem gäller det?</div>
+              <div style={{display:"flex",gap:8}}>
+                {[...PERSONS,{id:"both",label:"Båda",color:"#6b6357",bg:"#ede8e1"}].map(p=>(<button key={p.id} onClick={()=>setF({...f,person:p.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",background:f.person===p.id?p.bg:"#ede8e1",color:f.person===p.id?p.color:"#6b6357",border:f.person===p.id?`1.5px solid ${p.color}44`:"1.5px solid transparent"}}>{p.label}</button>))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Upprepning</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {RECURRENCE_OPTS.map(r=>(<button key={r.id} onClick={()=>setF({...f,recurrence:r.id})} style={{padding:"9px 14px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",background:f.recurrence===r.id?"#e8f0e8":"#f7f4ef",color:f.recurrence===r.id?"#3a6b3a":"#6b6357",border:f.recurrence===r.id?"1.5px solid #5a8c5a44":"1.5px solid transparent",fontWeight:f.recurrence===r.id?500:400}}>{r.label}</button>))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Färg</div>
+              <div style={{display:"flex",gap:8}}>{ECOLS.map(c=>(<button key={c} onClick={()=>setF({...f,color:c})} style={{width:28,height:28,borderRadius:"50%",background:c,border:f.color===c?"3px solid #2c2420":"3px solid transparent",cursor:"pointer"}}/>))}</div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Notering (valfritt)</div>
+              <textarea style={{...inp,minHeight:72,resize:"vertical"}} placeholder="Anteckning till händelsen…" value={f.note||""} onChange={e=>setF({...f,note:e.target.value})}/>
+            </div>
+
+            <button style={btnP} onClick={saveEv}>{editId?"Spara ändringar":"Lägg till händelse"}</button>
+            {editId&&!showDelConfirm&&(
+              <button style={{...btnP,background:"transparent",color:"#c0392b",border:"1.5px solid #f5c6bc"}} onClick={()=>isRecurringEdit?setShowDelConfirm(true):deleteEv(editId,"all")}>Ta bort händelse</button>
+            )}
+            {editId&&showDelConfirm&&(
+              <div style={{background:"#fdf0ee",borderRadius:14,padding:14,display:"flex",flexDirection:"column",gap:10}}>
+                <div style={{fontSize:13,color:"#c0392b",fontWeight:600}}>Återkommande händelse – vad vill du ta bort?</div>
+                <button style={{...btnP,background:"#e8403a"}} onClick={()=>deleteEv(editId,"single")}>Bara denna förekomst ({f.date})</button>
+                <button style={{...btnP,background:"#c0392b"}} onClick={()=>deleteEv(editId,"all")}>Alla förekomster av serien</button>
+                <button style={{...btnP,background:"transparent",color:"#9b9186",border:"1.5px solid #e2ddd6"}} onClick={()=>setShowDelConfirm(false)}>Avbryt</button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── ECONOMY ──────────────────────────────────────────────────────────────────
+const CATS=[
+  {id:"mat",label:"Mat & handel",icon:"🛒"},{id:"hem",label:"Hem & bostad",icon:"🏠"},
+  {id:"noje",label:"Nöje & resor",icon:"✈️"},{id:"transport",label:"Transport",icon:"🚗"},
+  {id:"ovrigt",label:"Övrigt",icon:"💳"},
+];
+const SPLIT_TYPES=[
+  {id:"full",label:"Jag lade ut hela",desc:"Motparten är skyldig halva",icon:"💸"},
+  {id:"half",label:"Delat lika",desc:"Vi betalade varsitt håll",icon:"🤝"},
+  {id:"mine",label:"Bara mitt",desc:"Räknas ej mot den andre",icon:"👤"},
+  {id:"theirs",label:"Bara sambons",desc:"Ingen påverkan på mig",icon:"🔄"},
+];
+function calcImpact(e){
+  const a=e.amount;
+  if(e.splitType==="half"||e.splitType==="mine"||e.splitType==="theirs")return{affectsA:0,affectsB:0};
+  if(e.person==="a")return{affectsA:a/2,affectsB:-(a/2)};
+  return{affectsA:-(a/2),affectsB:a/2};
+}
+const sek=n=>{
+  const abs=Math.abs(Math.round(n));
+  const s=abs.toLocaleString("sv-SE")+" kr";
+  return n<0?"-"+s:s;
+};
+
+function ClosedPeriodRow({cp}){
+  const [expanded,setExpanded]=useState(false);
+  const r=cp.closedRecord||{};
+  return(
+    <div style={{background:"#f7f4ef",borderRadius:14,overflow:"hidden",border:"0.5px solid #e2ddd6"}}>
+      <div onClick={()=>setExpanded(!expanded)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 14px",cursor:"pointer"}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:600,color:"#2c2420"}}>{cp.name}</div>
+          <div style={{fontSize:11,color:"#9b9186",marginTop:2}}>Uppgjord {cp.closedDate||""} · {r.count||0} utlägg · {sek((r.totA||0)+(r.totB||0))}</div>
+        </div>
+        <span style={{color:"#c4bcaf",fontSize:14}}>{expanded?"▾":"▸"}</span>
+      </div>
+      {expanded&&(
+        <div style={{borderTop:"0.5px solid #e2ddd6"}}>
+          {PERSONS.map(p=>(<div key={p.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 14px"}}><span style={{fontSize:12,color:"#9b9186"}}>{p.label} lade ut</span><span style={{fontSize:12,fontWeight:600,color:"#2c2420"}}>{sek(p.id==="a"?r.totA||0:r.totB||0)}</span></div>))}
+          {r.owes&&<div style={{padding:"8px 14px",fontSize:13,color:"#b8815a",fontWeight:500}}>{r.owes.from.label} betalade {sek(r.owes.amount)} till {r.owes.to.label}</div>}
+          {r.expenses&&r.expenses.length>0&&(
+            <div style={{borderTop:"0.5px solid #f2ede6",padding:"10px 14px"}}>
+              <div style={{fontSize:11,color:"#9b9186",marginBottom:8}}>Utlägg:</div>
+              {r.expenses.map(e=>{const p=PERSONS.find(p=>p.id===e.person);return(
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:"0.5px solid #f7f4ef"}}>
+                  <span style={{fontSize:13,color:"#2c2420"}}>{e.title}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:13,fontWeight:500,color:"#2c2420"}}>{sek(e.amount)}</span>{p&&<Av p={p} s={18}/>}</div>
+                </div>
+              );})}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExpensesTab(){
+  const today=new Date().toISOString().split("T")[0];
+
+  // Periods: each period has {id, name, expenses, settled}
+  const [periods,setPeriods]=useLS(KEYS.expenses,[
+    {id:"default",name:"Löpande",expenses:[
+      {id:1,title:"ICA-handel",amount:1240,person:"b",category:"mat",splitType:"full",date:"2025-06-02"},
+      {id:2,title:"Hemfix",amount:890,person:"a",category:"hem",splitType:"full",date:"2025-06-01"},
+      {id:3,title:"Elräkning",amount:1860,person:"b",category:"hem",splitType:"full",date:"2025-06-01"},
+    ],settledHistory:[]}
+  ]);
+  const [activePeriodId,setActivePeriodId]=useState("default");
+  const [showNewPeriod,setShowNewPeriod]=useState(false);
+  const [newPeriodName,setNewPeriodName]=useState("");
+  const [showAdd,setShowAdd]=useState(false);
+  const [showSettle,setShowSettle]=useState(false);
+  const [showHist,setShowHist]=useState(false);
+  const [f,setF]=useState({title:"",amount:"",person:"a",category:"mat",splitType:"full"});
+
+  const period=periods.find(p=>p.id===activePeriodId)||periods[0];
+  const exps=period?.expenses||[];
+  const savePeriod=(pid,patch)=>setPeriods(periods.map(p=>p.id===pid?{...p,...patch}:p));
+
+  let balA=0;
+  exps.forEach(e=>{const im=calcImpact(e);balA+=im.affectsA;});
+  const totA=exps.reduce((s,e)=>e.person==="a"?s+e.amount:s,0);
+  const totB=exps.reduce((s,e)=>e.person==="b"?s+e.amount:s,0);
+  const total=totA+totB;
+  const owes=balA>0.5?{from:PB,to:PA,amount:Math.abs(balA)}:balA<-0.5?{from:PA,to:PB,amount:Math.abs(balA)}:null;
+  const cat=id=>CATS.find(c=>c.id===id)||CATS[4];
+  const sp=id=>SPLIT_TYPES.find(s=>s.id===id)||SPLIT_TYPES[0];
+
+  const add=()=>{
+    const amt=parseFloat(f.amount);
+    if(!f.title.trim()||isNaN(amt)||amt<=0)return;
+    const newExp={id:Date.now(),...f,amount:amt,title:f.title.trim(),date:today};
+    savePeriod(period.id,{expenses:[...exps,newExp]});
+    setF({title:"",amount:"",person:"a",category:"mat",splitType:"full"});setShowAdd(false);
+  };
+  const settle=()=>{
+    const record={id:Date.now(),date:today,totA,totB,owes,count:exps.length,expenses:[...exps]};
+    // Mark period as closed - it disappears from active selector and goes to history
+    savePeriod(period.id,{closed:true,closedDate:today,closedRecord:record,expenses:[],settledHistory:[record,...(period.settledHistory||[])]});
+    // Switch to another open period if available
+    const nextOpen=periods.find(p=>p.id!==period.id&&!p.closed);
+    if(nextOpen)setActivePeriodId(nextOpen.id);
+    else{
+      // Create new "Löpande" period automatically
+      const np={id:Date.now().toString(),name:"Löpande",expenses:[],settledHistory:[]};
+      setPeriods(prev=>[...prev,np]);
+      setActivePeriodId(np.id);
+    }
+    setShowSettle(false);
+  };
+  const addPeriod=()=>{
+    if(!newPeriodName.trim())return;
+    const np={id:Date.now().toString(),name:newPeriodName.trim(),expenses:[],settledHistory:[]};
+    setPeriods([...periods,np]);
+    setActivePeriodId(np.id);
+    setNewPeriodName("");setShowNewPeriod(false);
+  };
+
+  // allHistory replaced by unified history modal
+  const allHistory=[];
+
+  return(
+    <div>
+      {/* Period selector - only show ACTIVE (non-settled) periods */}
+      <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4,alignItems:"center"}}>
+        {periods.filter(p=>!p.closed).map(p=>(
+          <button key={p.id} onClick={()=>setActivePeriodId(p.id)} style={{flexShrink:0,padding:"6px 14px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:12,
+            background:activePeriodId===p.id?"#2c2420":"#ede8e1",color:activePeriodId===p.id?"#fff":"#6b6357",fontWeight:activePeriodId===p.id?500:400}}>
+            {p.name}
+          </button>
+        ))}
+        <button onClick={()=>setShowNewPeriod(true)} style={{flexShrink:0,width:28,height:28,borderRadius:"50%",background:"#b8815a",border:"none",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+          <Ic n="plus" s={15}/>
+        </button>
+      </div>
+
+      <SHdr title={period?.name||"Utlägg"} onAdd={()=>setShowAdd(true)}>
+        <button onClick={()=>setShowHist(true)} style={{background:"none",border:"none",color:"#9b9186",cursor:"pointer",padding:2}}><Ic n="history" s={20}/></button>
+      </SHdr>
+
+      {/* Balance card */}
+      <div style={{background:"#2c2420",borderRadius:20,padding:"20px 20px 18px",marginBottom:14,color:"#fff"}}>
+        <div style={{fontSize:11,color:"#9b9186",marginBottom:6}}>Balans · {period?.name}</div>
+        {total===0?<div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:16}}>Inga utlägg än <span style={{fontStyle:"italic",color:"#b8815a"}}>✓</span></div>
+        :owes?<div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:16,lineHeight:1.3}}>{owes.from.label} är skyldig <span style={{color:"#b8815a",fontStyle:"italic"}}>{owes.to.label} {sek(owes.amount)}</span></div>
+        :<div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,marginBottom:16,color:"#7db87d"}}>Ni är <span style={{fontStyle:"italic"}}>jämnt!</span> 🎉</div>}
+        <div style={{display:"flex",gap:10,marginBottom:16}}>
+          {PERSONS.map(p=>{const amt=p.id==="a"?totA:totB;return(<div key={p.id} style={{flex:1,background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 14px"}}><div style={{fontSize:11,color:"#9b9186",marginBottom:3}}>{p.label} har lagt ut</div><div style={{fontSize:18,fontWeight:500,color:"#fff"}}>{sek(amt)}</div></div>);})}
+        </div>
+        <div style={{borderTop:"0.5px solid rgba(255,255,255,0.1)",paddingTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{fontSize:12,color:"#9b9186"}}>Totalt: <span style={{color:"#fff"}}>{sek(total)}</span></div>
+          <button onClick={()=>setShowSettle(true)} style={{background:"#b8815a",border:"none",borderRadius:10,padding:"8px 16px",color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}><Ic n="hand" s={15} color="#fff"/> Gör upp</button>
+        </div>
+      </div>
+
+      {exps.length===0&&<Empty n="coins" text="Inga utlägg i denna period"/>}
+      {exps.length>0&&(<>
+        <div style={{fontSize:13,color:"#9b9186",marginBottom:10,fontWeight:500}}>Utlägg</div>
+        <Card>{[...exps].reverse().map((e,i,a)=>{const p=PERSONS.find(p=>p.id===e.person);return(
+          <div key={e.id} style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px",borderBottom:i<a.length-1?"0.5px solid #f2ede6":"none"}}>
+            <div style={{width:36,height:36,borderRadius:10,background:"#f7f4ef",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{cat(e.category).icon}</div>
+            <div style={{flex:1}}><div style={{fontSize:14,color:"#2c2420",fontWeight:500}}>{e.title}</div><div style={{display:"flex",alignItems:"center",gap:6,marginTop:2}}><span style={{fontSize:11,color:"#9b9186"}}>{e.date}</span><span style={{fontSize:10,background:"#ede8e1",color:"#6b6357",padding:"1px 6px",borderRadius:6}}>{sp(e.splitType).icon} {sp(e.splitType).label}</span></div></div>
+            <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3}}><div style={{fontSize:14,fontWeight:600,color:"#2c2420"}}>{sek(e.amount)}</div><Av p={p} s={18}/></div>
+            <button onClick={()=>savePeriod(period.id,{expenses:exps.filter(x=>x.id!==e.id)})} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
+          </div>
+        );})}
+        </Card>
+      </>)}
+
+      {/* Add modal */}
+      {showAdd&&(<Modal title="Nytt utlägg" onClose={()=>setShowAdd(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <input style={inp} placeholder="Vad gäller det?" value={f.title} onChange={e=>setF({...f,title:e.target.value})} autoFocus/>
+          <input style={inp} type="number" placeholder="Belopp (kr)" value={f.amount} onChange={e=>setF({...f,amount:e.target.value})}/>
+          <PPick val={f.person} onChange={v=>setF({...f,person:v})} label="Vem lade ut?"/>
+          <div>
+            <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Typ av utlägg</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {SPLIT_TYPES.map(st=>(<button key={st.id} onClick={()=>setF({...f,splitType:st.id})} style={{padding:"10px 12px",borderRadius:12,fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",display:"flex",alignItems:"center",gap:10,background:f.splitType===st.id?"#fbeee6":"#f7f4ef",color:f.splitType===st.id?"#b8815a":"#2c2420",border:f.splitType===st.id?"1.5px solid #b8815a55":"1.5px solid transparent",fontWeight:f.splitType===st.id?500:400}}><span style={{fontSize:18,flexShrink:0}}>{st.icon}</span><div><div style={{fontWeight:500}}>{st.label}</div><div style={{fontSize:11,color:"#9b9186",marginTop:1}}>{st.desc}</div></div>{f.splitType===st.id&&<div style={{marginLeft:"auto",width:18,height:18,borderRadius:"50%",background:"#b8815a",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="check" s={11} color="#fff"/></div>}</button>))}
+            </div>
+          </div>
+          <div><div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Kategori</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>{CATS.map(c=>(<button key={c.id} onClick={()=>setF({...f,category:c.id})} style={{padding:"8px 10px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",textAlign:"left",background:f.category===c.id?"#fbeee6":"#ede8e1",color:f.category===c.id?"#b8815a":"#6b6357",border:f.category===c.id?"1.5px solid #b8815a44":"1.5px solid transparent",fontWeight:f.category===c.id?500:400}}>{c.icon} {c.label}</button>))}</div></div>
+          <button style={btnP} onClick={add}>Lägg till utlägg</button>
+        </div>
+      </Modal>)}
+
+      {/* Settle modal */}
+      {showSettle&&(<Modal title="Gör upp" onClose={()=>setShowSettle(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={{background:"#f7f4ef",borderRadius:14,padding:16}}>
+            <div style={{fontSize:13,color:"#6b6357",marginBottom:8,fontWeight:500}}>Period: {period?.name}</div>
+            {PERSONS.map(p=>(<div key={p.id} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:14,color:"#2c2420"}}>{p.label} har lagt ut</span><span style={{fontWeight:600,color:p.color}}>{sek(p.id==="a"?totA:totB)}</span></div>))}
+            <div style={{borderTop:"0.5px solid #e2ddd6",paddingTop:10,marginTop:4}}>
+              {owes?<div style={{fontSize:15,color:"#2c2420",fontWeight:500,textAlign:"center"}}>{owes.from.label} betalar {owes.to.label} <span style={{color:"#b8815a"}}>{sek(owes.amount)}</span></div>
+              :<div style={{fontSize:15,color:"#5a8c5a",fontWeight:500,textAlign:"center"}}>Ni är jämnt! 🎉</div>}
+            </div>
+          </div>
+          <div style={{fontSize:13,color:"#6b6357",background:"#f7f4ef",borderRadius:12,padding:"10px 14px"}}>Utläggen sparas i historiken för perioden. Perioden töms och ni kan börja om.</div>
+          <button style={btnP} onClick={settle}>✓ Bekräfta – vi är kvitt!</button>
+          <button style={{...btnP,background:"transparent",color:"#9b9186",border:"1.5px solid #e2ddd6"}} onClick={()=>setShowSettle(false)}>Avbryt</button>
+        </div>
+      </Modal>)}
+
+      {/* Unified history - all closed periods */}
+      {showHist&&(<Modal title="Historik – alla perioder" onClose={()=>setShowHist(false)}>
+        {(()=>{
+          const closedPeriods=periods.filter(p=>p.closed).sort((a,b)=>(b.closedDate||"").localeCompare(a.closedDate||""));
+          if(closedPeriods.length===0)return<div style={{textAlign:"center",color:"#9b9186",padding:"20px 0",fontSize:14}}>Inga uppgjorda perioder ännu</div>;
+          return<div style={{display:"flex",flexDirection:"column",gap:14}}>{closedPeriods.map(cp=><ClosedPeriodRow key={cp.id} cp={cp}/>)}</div>;
+        })()}
+      </Modal>)}
+
+      {/* New period modal */}
+      {showNewPeriod&&(<Modal title="Ny utläggsperiod" onClose={()=>setShowNewPeriod(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{fontSize:13,color:"#6b6357"}}>T.ex. "Mallorca 2026", "Renovering", "Löpande"</div>
+          <input style={inp} placeholder="Periodens namn" value={newPeriodName} onChange={e=>setNewPeriodName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addPeriod()} autoFocus/>
+          <button style={btnP} onClick={addPeriod}>Skapa period</button>
+        </div>
+      </Modal>)}
+    </div>
+  );
+}
+
+const BUDGET_CATS=[
+  {id:"lon_a",  label:"Lön "+PA.label, icon:"💰", type:"income",  person:"a"},
+  {id:"lon_b",  label:"Lön "+PB.label, icon:"💰", type:"income",  person:"b"},
+  {id:"ovr_ink",label:"Övrig inkomst", icon:"📈", type:"income",  person:null},
+  {id:"hyra",   label:"Hyra/bolån",    icon:"🏠", type:"expense", person:null},
+  {id:"mat",    label:"Mat & handel",  icon:"🛒", type:"expense", person:null},
+  {id:"el_inet",label:"El & internet", icon:"💡", type:"expense", person:null},
+  {id:"transp", label:"Transport",     icon:"🚗", type:"expense", person:null},
+  {id:"noje",   label:"Nöje & resor", icon:"✈️", type:"expense", person:null},
+  {id:"halsa",  label:"Hälsa",         icon:"🏥", type:"expense", person:null},
+  {id:"sparande",label:"Sparande",     icon:"🏦", type:"expense", person:null},
+  {id:"ovr_utg",label:"Övrigt",        icon:"💳", type:"expense", person:null},
+];
+
+function BudgetTab(){
+  const now=new Date();
+  const [templates,setTemplates]=useLS(KEYS.budgetTemplates,[]);
+  const [budgetMonths,setBudgetMonths]=useLS(KEYS.budget,{});
+  const [budgetSettled,setBudgetSettled]=useLS(KEYS.budgetSettled,[]);
+  const [activeMonth,setActiveMonth]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`);
+  const [showAdd,setShowAdd]=useState(false);
+  const [showTpl,setShowTpl]=useState(false);
+  const [showTplPicker,setShowTplPicker]=useState(false);
+  const [showSettle,setShowSettle]=useState(false);
+  const [tplName,setTplName]=useState("");
+  const [editingEntry,setEditingEntry]=useState(null); // {id, amount}
+  const [f,setF]=useState({cat:"lon_a",amount:"",note:""});
+
+  const monthLabel=m=>{const[y,mo]=m.split("-");return`${MONTHS[parseInt(mo)-1]} ${y}`;};
+  const adjMonth=delta=>{const d=new Date(activeMonth+"-01");d.setMonth(d.getMonth()+delta);setActiveMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
+
+  const getEntries=()=>budgetMonths[activeMonth]||[];
+  const entries=getEntries();
+  const saveEntries=ents=>setBudgetMonths(prev=>({...prev,[activeMonth]:ents}));
+
+  // Toggle person on an entry (cycle: null → a → b → null)
+  const cycleEntryPerson=(id)=>{
+    saveEntries(entries.map(e=>{
+      if(e.id!==id)return e;
+      const cur=e.person;
+      const next=cur===null?"a":cur==="a"?"b":null;
+      return {...e,person:next};
+    }));
+  };
+  // Also sync person change to templates that contain this label
+  const setEntryPerson=(id,person)=>{
+    saveEntries(entries.map(e=>e.id===id?{...e,person}:e));
+  };
+  const updateEntryAmount=(id,amount)=>{
+    const amt=parseFloat(amount);
+    if(isNaN(amt)||amt<=0)return;
+    saveEntries(entries.map(e=>e.id===id?{...e,amount:amt}:e));
+    setEditingEntry(null);
+  };
+
+  const addEntry=()=>{
+    const amt=parseFloat(f.amount);if(isNaN(amt)||amt<=0)return;
+    const catInfo=BUDGET_CATS.find(c=>c.id===f.cat)||BUDGET_CATS[0];
+    // person from category default if set, otherwise null (unassigned)
+    const entry={id:Date.now(),cat:f.cat,label:catInfo.label,icon:catInfo.icon,type:catInfo.type,person:catInfo.person||null,amount:amt,note:f.note.trim()};
+    saveEntries([...entries,entry]);
+    setF({cat:"lon_a",amount:"",note:""});setShowAdd(false);
+  };
+  const removeEntry=id=>saveEntries(entries.filter(e=>e.id!==id));
+
+  // Save current month as template
+  const saveTemplate=()=>{
+    if(!tplName.trim()||entries.length===0)return;
+    const tpl={id:Date.now(),name:tplName.trim(),entries:entries.map(e=>({...e,id:Date.now()+Math.random()}))};
+    setTemplates([...templates,tpl]);
+    setTplName("");setShowTpl(false);
+  };
+  // Load template into month
+  const loadTemplate=tpl=>{
+    const newEntries=tpl.entries.map(e=>({...e,id:Date.now()+Math.random()}));
+    saveEntries(newEntries);setShowTplPicker(false);
+  };
+  const deleteTemplate=id=>setTemplates(templates.filter(t=>t.id!==id));
+
+  const incomes=entries.filter(e=>e.type==="income");
+  const expenses=entries.filter(e=>e.type==="expense");
+  const totalIncome=incomes.reduce((s,e)=>s+e.amount,0);
+  const totalExpense=expenses.reduce((s,e)=>s+e.amount,0);
+  const balance=totalIncome-totalExpense;
+
+  // Correct Splitwise+income equalisation:
+  // net_A = incA - paidA  (what A keeps after paying their expenses)
+  // net_B = incB - paidB
+  // target = (net_A + net_B) / 2  (fair equal share of combined net)
+  // if net_A < target → A is owed (target - net_A) from B
+  // if net_A > target → A owes (net_A - target) to B
+  // Example: Philip 30k/5000 spent, Melinda 32k/500 spent
+  //   netA=25000, netB=31500, target=28250 → Melinda owes Philip 3250 ✓
+  const incA=incomes.filter(e=>e.person==="a").reduce((s,e)=>s+e.amount,0);
+  const incB=incomes.filter(e=>e.person==="b").reduce((s,e)=>s+e.amount,0);
+  const incShared=incomes.filter(e=>!e.person).reduce((s,e)=>s+e.amount,0);
+  const paidA=expenses.filter(e=>e.person==="a").reduce((s,e)=>s+e.amount,0);
+  const paidB=expenses.filter(e=>e.person==="b").reduce((s,e)=>s+e.amount,0);
+  const netA=(incA+incShared/2)-paidA;
+  const netB=(incB+incShared/2)-paidB;
+  const netDiff=netA-netB; // positive = A has more left → A pays B
+  const budgetOwes=netDiff>1?{from:PA,to:PB,amount:netDiff/2}:netDiff<-1?{from:PB,to:PA,amount:Math.abs(netDiff)/2}:null;
+
+  const doSettle=()=>{
+    setBudgetSettled([{id:Date.now(),month:activeMonth,netA,netB,owes:budgetOwes,totalIncome,totalExpense},...budgetSettled]);
+    saveEntries([]);setShowSettle(false);
+  };
+
+  return(
+    <div>
+      <SHdr title="Månadsbudget">
+        <button onClick={()=>setShowTplPicker(true)} title="Ladda mall" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="template" s={20}/></button>
+      </SHdr>
+
+      {/* Month navigator */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <button onClick={()=>adjMonth(-1)} style={{background:"none",border:"none",cursor:"pointer",color:"#6b6357",padding:4}}><Ic n="chevL" s={20}/></button>
+        <span style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:"#2c2420"}}>{monthLabel(activeMonth)}</span>
+        <button onClick={()=>adjMonth(1)} style={{background:"none",border:"none",cursor:"pointer",color:"#6b6357",padding:4}}><Ic n="chevR" s={20}/></button>
+      </div>
+
+      {/* Summary */}
+      <div style={{background:"#2c2420",borderRadius:20,padding:"18px 20px",marginBottom:14,color:"#fff"}}>
+        <div style={{display:"flex",gap:10,marginBottom:14}}>
+          <div style={{flex:1,background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"#9b9186",marginBottom:3}}>Inkomster</div>
+            <div style={{fontSize:18,fontWeight:500,color:"#7db87d"}}>{sek(totalIncome)}</div>
+          </div>
+          <div style={{flex:1,background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"#9b9186",marginBottom:3}}>Utgifter</div>
+            <div style={{fontSize:18,fontWeight:500,color:"#d97b5a"}}>{sek(totalExpense)}</div>
+          </div>
+        </div>
+        <div style={{borderTop:"0.5px solid rgba(255,255,255,0.1)",paddingTop:12,marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:12,color:"#9b9186"}}>Kvar totalt</span>
+          <span style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:balance>=0?"#7db87d":"#d97b5a",fontStyle:"italic"}}>{balance>=0?"+":""}{sek(balance)}</span>
+        </div>
+
+        {/* Per-person balance */}
+        {entries.length>0&&(
+          <>
+            <div style={{fontSize:11,color:"#9b9186",marginBottom:8}}>Balans per person</div>
+            <div style={{display:"flex",gap:10,marginBottom:12}}>
+              {PERSONS.map(p=>{
+                const inc=p.id==="a"?incA+incShared/2:incB+incShared/2;
+                const paid=p.id==="a"?paidA:paidB;
+                const net=p.id==="a"?netA:netB;
+                return(<div key={p.id} style={{flex:1,background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}><Av p={p} s={18}/><span style={{fontSize:11,color:"#9b9186"}}>{p.label}</span></div>
+                  <div style={{fontSize:11,color:"#9b9186"}}>Inkomst: <span style={{color:"#7db87d",fontWeight:500}}>{sek(inc)}</span></div>
+                  <div style={{fontSize:11,color:"#9b9186"}}>Lagt ut: <span style={{color:"#d97b5a",fontWeight:500}}>{sek(paid)}</span></div>
+                  <div style={{fontSize:14,fontWeight:600,color:net>=0?"#7db87d":"#d97b5a",marginTop:4,borderTop:"0.5px solid rgba(255,255,255,0.1)",paddingTop:4}}>Behåller: {sek(net)}</div>
+                </div>);
+              })}
+            </div>
+            {budgetOwes?(
+              <div style={{background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,lineHeight:1.3}}>
+                  {budgetOwes.from.label} betalar <span style={{color:"#b8815a",fontStyle:"italic"}}>{sek(budgetOwes.amount)}</span> till {budgetOwes.to.label}
+                </div>
+                <div style={{fontSize:11,color:"#9b9186",marginTop:4}}>för att ni ska ha lika mycket kvar</div>
+              </div>
+            ):(
+              <div style={{background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:"#7db87d"}}>Ni behåller <span style={{fontStyle:"italic"}}>lika mycket</span> 🎉</div>
+              </div>
+            )}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setShowAdd(true)} style={{flex:1,background:"#b8815a",border:"none",borderRadius:10,padding:"9px 14px",color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>+ Lägg till post</button>
+              <button onClick={()=>setShowSettle(true)} style={{flex:1,background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:10,padding:"9px 14px",color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>Gör upp</button>
+            </div>
+          </>
+        )}
+                {entries.length===0&&(
+          <button onClick={()=>setShowAdd(true)} style={{width:"100%",background:"#b8815a",border:"none",borderRadius:10,padding:"9px 14px",color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>+ Lägg till post</button>
+        )}
+      </div>
+
+      {/* Incomes */}
+      {/* Helper: render a budget row with P/M toggle + editable amount */}
+      {(()=>{
+        const renderBudgetRow=(e,i,arr,amtColor)=>{
+          const isEditing=editingEntry===e.id;
+          return(
+            <div key={e.id} style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",borderBottom:i<arr.length-1?"0.5px solid #f2ede6":"none"}}>
+              <span style={{fontSize:16,flexShrink:0}}>{e.icon}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:"#2c2420",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.label}</div>
+                {e.note&&<div style={{fontSize:11,color:"#9b9186"}}>{e.note}</div>}
+              </div>
+              {/* Person toggle P/M */}
+              <div style={{display:"flex",gap:4,flexShrink:0}}>
+                {PERSONS.map(p=>(
+                  <button key={p.id} onClick={()=>setEntryPerson(e.id,e.person===p.id?null:p.id)}
+                    style={{width:28,height:28,borderRadius:"50%",border:e.person===p.id?`2px solid ${p.color}`:"2px solid transparent",
+                      background:e.person===p.id?p.bg:"#ede8e1",cursor:"pointer",padding:0,
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:e.person===p.id?p.color:"#9b9186"}}>
+                    {p.label[0]}
+                  </button>
+                ))}
+              </div>
+              {/* Editable amount */}
+              {isEditing?(
+                <input autoFocus style={{...inp,width:90,padding:"5px 8px",fontSize:13,textAlign:"right"}}
+                  type="number" defaultValue={e.amount}
+                  onBlur={ev=>updateEntryAmount(e.id,ev.target.value)}
+                  onKeyDown={ev=>ev.key==="Enter"&&updateEntryAmount(e.id,ev.target.value)}/>
+              ):(
+                <div onClick={()=>setEditingEntry(e.id)} style={{fontSize:14,fontWeight:600,color:amtColor,cursor:"pointer",minWidth:60,textAlign:"right"}} title="Tryck för att redigera">{sek(e.amount)}</div>
+              )}
+              <button onClick={()=>removeEntry(e.id)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2,flexShrink:0}}><Ic n="x" s={15}/></button>
+            </div>
+          );
+        };
+        return(<>
+          {incomes.length>0&&(
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:"#5a8c5a",fontWeight:600,marginBottom:6,letterSpacing:.5}}>INKOMSTER</div>
+              <Card>{incomes.map((e,i,a)=>renderBudgetRow(e,i,a,"#5a8c5a"))}</Card>
+            </div>
+          )}
+          {expenses.length>0&&(
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:"#c0392b",fontWeight:600,marginBottom:6,letterSpacing:.5}}>UTGIFTER</div>
+              <div style={{fontSize:11,color:"#9b9186",marginBottom:6}}>Tryck på P / M för att markera vem som lägger ut. Tryck på beloppet för att ändra.</div>
+              <Card>{expenses.map((e,i,a)=>renderBudgetRow(e,i,a,"#c0392b"))}</Card>
+            </div>
+          )}
+        </>);
+      })()}
+
+      {/* Save as template button */}
+      {entries.length>0&&(
+        <div style={{display:"flex",gap:8,marginTop:4,marginBottom:12}}>
+          <button onClick={()=>setShowTpl(true)} style={{flex:1,padding:"10px",borderRadius:12,background:"#f7f4ef",border:"1px solid #e2ddd6",color:"#6b6357",fontSize:13,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            <Ic n="template" s={16} color="#6b6357"/> Spara som mall
+          </button>
+        </div>
+      )}
+
+      {/* Budget settle history */}
+      {budgetSettled.length>0&&(
+        <div>
+          <div style={{fontSize:12,color:"#9b9186",marginBottom:8,fontWeight:500}}>Gjorda uppgörelser</div>
+          <Card>
+            {budgetSettled.slice(0,4).map((r,i)=>(
+              <div key={r.id} style={{padding:"11px 14px",borderBottom:i<Math.min(3,budgetSettled.length-1)?"0.5px solid #f2ede6":"none"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:13,fontWeight:500,color:"#2c2420"}}>{monthLabel(r.month)}</span>
+                  <span style={{fontSize:11,color:"#9b9186"}}>{r.month}</span>
+                </div>
+                {r.owes?<div style={{fontSize:12,color:"#b8815a"}}>{r.owes.from.label} betalade {sek(r.owes.amount)} till {r.owes.to.label}</div>
+                :<div style={{fontSize:12,color:"#5a8c5a"}}>Jämnt! 🎉</div>}
+              </div>
+            ))}
+          </Card>
+        </div>
+      )}
+
+      {/* Add modal */}
+      {showAdd&&(<Modal title="Lägg till budgetpost" onClose={()=>setShowAdd(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div>
+            <div style={{fontSize:12,color:"#5a8c5a",fontWeight:600,marginBottom:6,letterSpacing:.3}}>INKOMSTER</div>
+            <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:12}}>
+              {BUDGET_CATS.filter(c=>c.type==="income").map(c=>(<button key={c.id} onClick={()=>setF({...f,cat:c.id})} style={{padding:"9px 12px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",background:f.cat===c.id?"#e8f0e8":"#f7f4ef",color:f.cat===c.id?"#3a6b3a":"#6b6357",border:f.cat===c.id?"1.5px solid #5a8c5a44":"1.5px solid transparent",fontWeight:f.cat===c.id?500:400}}>{c.icon} {c.label}</button>))}
+            </div>
+            <div style={{fontSize:12,color:"#c0392b",fontWeight:600,marginBottom:6,letterSpacing:.3}}>UTGIFTER</div>
+            <div style={{display:"flex",flexDirection:"column",gap:4}}>
+              {BUDGET_CATS.filter(c=>c.type==="expense").map(c=>(<button key={c.id} onClick={()=>setF({...f,cat:c.id})} style={{padding:"9px 12px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",background:f.cat===c.id?"#fdf0ee":"#f7f4ef",color:f.cat===c.id?"#c0392b":"#6b6357",border:f.cat===c.id?"1.5px solid #c0392b44":"1.5px solid transparent",fontWeight:f.cat===c.id?500:400}}>{c.icon} {c.label}</button>))}
+            </div>
+          </div>
+          <input style={inp} type="number" placeholder="Belopp (kr)" value={f.amount} onChange={e=>setF({...f,amount:e.target.value})} autoFocus/>
+          <input style={inp} placeholder="Notering (valfritt)" value={f.note} onChange={e=>setF({...f,note:e.target.value})}/>
+          <button style={btnP} onClick={addEntry}>Lägg till</button>
+        </div>
+      </Modal>)}
+
+      {/* Save template modal */}
+      {showTpl&&(<Modal title="Spara som mall" onClose={()=>setShowTpl(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{fontSize:13,color:"#6b6357"}}>Sparar {entries.length} poster som en återanvändbar mall.</div>
+          <input style={inp} placeholder="Mallnamn (t.ex. Standardbudget)" value={tplName} onChange={e=>setTplName(e.target.value)} autoFocus/>
+          <button style={btnP} onClick={saveTemplate}>Spara mall</button>
+        </div>
+      </Modal>)}
+
+      {/* Load template picker */}
+      {showTplPicker&&(<Modal title="Välj mall" onClose={()=>setShowTplPicker(false)}>
+        {templates.length===0?<div style={{textAlign:"center",color:"#9b9186",padding:"20px 0",fontSize:14}}>Inga mallar sparade än. Lägg till poster och spara som mall.</div>:(
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {templates.map(tpl=>(<div key={tpl.id} style={{background:"#f7f4ef",borderRadius:12,padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:500,color:"#2c2420"}}>{tpl.name}</div>
+                <div style={{fontSize:12,color:"#9b9186"}}>{tpl.entries.length} poster</div>
+              </div>
+              <button onClick={()=>loadTemplate(tpl)} style={{padding:"7px 14px",borderRadius:10,background:"#b8815a",color:"#fff",border:"none",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>Ladda</button>
+              <button onClick={()=>deleteTemplate(tpl.id)} style={{width:32,height:32,borderRadius:10,background:"#fdf0ee",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><Ic n="trash" s={14} color="#c0392b"/></button>
+            </div>))}
+          </div>
+        )}
+      </Modal>)}
+
+      {/* Settle modal */}
+      {showSettle&&(<Modal title="Gör upp budget" onClose={()=>setShowSettle(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div style={{background:"#f7f4ef",borderRadius:14,padding:16}}>
+            <div style={{fontSize:13,color:"#6b6357",marginBottom:12}}>{monthLabel(activeMonth)}</div>
+            {PERSONS.map(p=>{const net=p.id==="a"?netA:netB;return(<div key={p.id} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:14,color:"#2c2420"}}>{p.label} netto</span><span style={{fontWeight:600,color:net>=0?"#5a8c5a":"#c0392b"}}>{net>=0?"+":""}{sek(net)}</span></div>);})}
+            <div style={{borderTop:"0.5px solid #e2ddd6",paddingTop:10,marginTop:4}}>
+              {budgetOwes?<div style={{fontSize:15,color:"#2c2420",fontWeight:500,textAlign:"center"}}>{budgetOwes.from.label} för över {sek(budgetOwes.amount)} till {budgetOwes.to.label}</div>
+              :<div style={{fontSize:15,color:"#5a8c5a",fontWeight:500,textAlign:"center"}}>Ni är jämna! 🎉</div>}
+            </div>
+          </div>
+          <button style={btnP} onClick={doSettle}>✓ Bekräfta uppgörelse</button>
+          <button style={{...btnP,background:"transparent",color:"#9b9186",border:"1.5px solid #e2ddd6"}} onClick={()=>setShowSettle(false)}>Avbryt</button>
+        </div>
+      </Modal>)}
+    </div>
+  );
+}
+
+function Economy(){
+  const [sub,setSub]=useState("expenses");
+  return(
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <button onClick={()=>setSub("expenses")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:sub==="expenses"?"#2c2420":"#ede8e1",color:sub==="expenses"?"#fff":"#6b6357",fontWeight:sub==="expenses"?500:400}}>Utlägg</button>
+        <button onClick={()=>setSub("budget")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:sub==="budget"?"#2c2420":"#ede8e1",color:sub==="budget"?"#fff":"#6b6357",fontWeight:sub==="budget"?500:400}}>Månadsbudget</button>
+      </div>
+      {sub==="expenses"&&<ExpensesTab/>}
+      {sub==="budget"&&<BudgetTab/>}
+    </div>
+  );
+}
+
+// ─── PICKUP ───────────────────────────────────────────────────────────────────
+const DEFAULT_PICKUP={0:{dropPerson:"a",pickPerson:"b",overrides:{}},1:{dropPerson:"b",pickPerson:"a",overrides:{}},2:{dropPerson:"a",pickPerson:"b",overrides:{}},3:{dropPerson:"b",pickPerson:"a",overrides:{}},4:{dropPerson:"a",pickPerson:"b",overrides:{}}};
+
+function PickupCell({emoji,personId,personName,onSwap,onOther}){
+  const p=personId&&personId!=="other"?PERSONS.find(x=>x.id===personId):null;
+  const isOther=personId==="other"&&personName;
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:6,flex:1,minWidth:0}}>
+      <span style={{fontSize:12,flexShrink:0}}>{emoji}</span>
+      {p?<div style={{display:"flex",alignItems:"center",gap:4,minWidth:0,flex:1}}><Av p={p} s={20}/><span style={{fontSize:12,color:p.color,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.label}</span></div>
+      :isOther?<div style={{display:"flex",alignItems:"center",gap:4,minWidth:0,flex:1}}><div style={{width:20,height:20,borderRadius:"50%",background:"#ede8e1",color:"#6b6357",fontSize:10,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{personName[0]}</div><span style={{fontSize:12,color:"#6b6357",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{personName}</span></div>
+      :<span style={{fontSize:12,color:"#f39c12",fontWeight:500,flex:1}}>Ingen</span>}
+      <button type="button" onClick={onOther} style={{height:32,padding:"0 9px",flexShrink:0,borderRadius:10,border:"1px solid #e2ddd6",background:personId==="other"?"#eef0f8":"#fff",cursor:"pointer",fontSize:11,color:personId==="other"?"#4a5a8c":"#6b6357",fontFamily:"inherit"}}>Annan</button>
+      <button type="button" onClick={onSwap} style={{width:32,height:32,flexShrink:0,borderRadius:10,border:"1px solid #e2ddd6",background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><Ic n="swap" s={15} color="#6b6357"/></button>
+    </div>
+  );
+}
+
+function Pickup({data,setData,pickupEnabled,setPickupEnabled}){
+  const [activities,setActivities]=useLS(KEYS.activities,[]);
+  const [actPauses,setActPauses]=useLS(KEYS.actPauses,{}); // {actId: {until: "2025-08-01"} or {indefinite: true}}
+  const [showAct,setShowAct]=useState(false);
+  const [editAct,setEditAct]=useState(null);
+  const [showPause,setShowPause]=useState(null); // actId
+  const [pauseForm,setPauseForm]=useState({weeks:"",indefinite:false});
+  const [otherDlg,setOtherDlg]=useState(null);
+  const [otherName,setOtherName]=useState("");
+  const defaultActF={childName:"",title:"",recurring:true,dow:0,date:"",time:"",person:"a"};
+  const [actF,setActF]=useState(defaultActF);
+
+  const weekdays=[0,1,2,3,4]; // Mon-Fri only in standard week
+  const thisWeek=getNext7Days().filter(d=>d.dow<5);
+
+  const swapWeek=(dow,field)=>setData(prev=>{const cur=prev[dow]?.[field]??null;const next=cyclePickupPerson(cur);return{...prev,[dow]:applyPickupCycle({...prev[dow]},field,next)};});
+  const swapDate=(dateStr,dow,field)=>setData(prev=>{const base=prev[dow]||{overrides:{}};const eff=getPickupForDay(prev,dow,dateStr);const next=cyclePickupPerson(eff[field]);const updated=applyPickupCycle({dropPerson:eff.dropPerson,dropPersonName:eff.dropPersonName,pickPerson:eff.pickPerson,pickPersonName:eff.pickPersonName},field,next);const ovs={...(base.overrides||{})};if(slotsMatchBase(updated,base))delete ovs[dateStr];else ovs[dateStr]=updated;return{...prev,[dow]:{...base,overrides:ovs}};});
+  const openOther=(dow,dateStr,field)=>{const eff=dateStr?getPickupForDay(data,dow,dateStr):data[dow]||{};setOtherName(eff[field]==="other"?(eff[field+"Name"]||""):"");setOtherDlg({dow,dateStr,field});};
+  const saveOther=()=>{if(!otherDlg)return;const trimmed=otherName.trim();if(!trimmed)return;const{dow,dateStr,field}=otherDlg;const nameField=field+"Name";setData(prev=>{const base=prev[dow]||{overrides:{}};const patch=slot=>({...slot,[field]:"other",[nameField]:trimmed});if(dateStr){const eff=getPickupForDay(prev,dow,dateStr);const updated=patch(eff);const ovs={...(base.overrides||{})};if(slotsMatchBase(updated,base))delete ovs[dateStr];else ovs[dateStr]=updated;return{...prev,[dow]:{...base,overrides:ovs}};}return{...prev,[dow]:patch({...base})};});setOtherDlg(null);setOtherName("");};
+  const isOverride=(dow,dateStr)=>{const base=data[dow];return base?.overrides&&base.overrides[dateStr]!=null;};
+  const missingDays=weekdays.filter(dow=>!slotHasPickup(data[dow]||{}));
+
+  const saveActivity=()=>{
+    if(!actF.childName.trim()||!actF.title.trim())return;
+    const act={id:editAct||Date.now(),childName:actF.childName.trim(),title:actF.title.trim(),recurring:actF.recurring,dow:actF.recurring?actF.dow:null,date:actF.recurring?null:actF.date,time:actF.time,person:actF.person};
+    if(editAct)setActivities(activities.map(a=>a.id===editAct?act:a));
+    else setActivities([...activities,act]);
+    setActF(defaultActF);setShowAct(false);setEditAct(null);
+  };
+  const openEditAct=act=>{setActF({childName:act.childName,title:act.title,recurring:act.recurring,dow:act.dow??0,date:act.date||"",time:act.time||"",person:act.person||"a"});setEditAct(act.id);setShowAct(true);};
+
+  // Pause helpers
+  const isActPaused=(actId)=>{
+    const p=actPauses[actId];
+    if(!p)return false;
+    if(p.indefinite)return true;
+    if(p.until&&p.until>=TODAY)return true;
+    return false;
+  };
+  const pauseAct=(actId,weeks,indefinite)=>{
+    const until=weeks?addDaysStr(TODAY,weeks*7):null;
+    setActPauses({...actPauses,[actId]:indefinite?{indefinite:true}:{until}});
+    setShowPause(null);
+  };
+  const resumeAct=(actId)=>{
+    const p={...actPauses};delete p[actId];setActPauses(p);
+  };
+
+  return(
+    <div>
+      <SHdr title="Hämtning & lämning" onAdd={()=>{setEditAct(null);setActF(defaultActF);setShowAct(true);}}>
+        <button onClick={()=>setPickupEnabled(!pickupEnabled)} title={pickupEnabled?"Avaktivera hämtning/lämning":"Aktivera hämtning/lämning"}
+          style={{padding:"5px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:12,
+            background:pickupEnabled?"#e8f0e8":"#fdf0ee",color:pickupEnabled?"#5a8c5a":"#c0392b",fontWeight:500}}>
+          {pickupEnabled?"✓ Aktiv":"✗ Pausad"}
+        </button>
+      </SHdr>
+
+      {!pickupEnabled&&(
+        <div style={{background:"#fdf0ee",borderRadius:12,padding:"12px 14px",marginBottom:14,border:"1px solid #f5c6bc",display:"flex",alignItems:"center",gap:10}}>
+          <Ic n="warn" s={18} color="#c0392b"/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#c0392b"}}>Hämtning & lämning är avaktiverad</div>
+            <div style={{fontSize:12,color:"#9b9186",marginTop:2}}>Syns inte i briefingen. Aktiviteter visas fortfarande.</div>
+          </div>
+          <button onClick={()=>setPickupEnabled(true)} style={{padding:"7px 12px",borderRadius:10,background:"#5a8c5a",color:"#fff",border:"none",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:500}}>Aktivera</button>
+        </div>
+      )}
+      <div style={{fontSize:12,color:"#9b9186",marginBottom:14,lineHeight:1.45}}>⟳ byter Philip → Melinda → Ingen. Tryck <em>Annan</em> för t.ex. mormor/morfar.</div>
+      {missingDays.length>0&&<div style={{background:"#fdf0ee",borderRadius:12,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:8,border:"1px solid #f5c6bc"}}><Ic n="warn" s={16} color="#c0392b"/><span style={{fontSize:12,color:"#c0392b"}}>Ingen ansvarig: {missingDays.map(d=>WEEKDAYS_SHORT[d]).join(", ")}</span></div>}
+
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:10,fontWeight:500}}>Denna vecka</div>
+      <Card style={{marginBottom:16}}>
+        {thisWeek.map(({date,label,dow},i)=>{
+          const eff=getPickupForDay(data,dow,date);const custom=isOverride(dow,date);
+          return(<div key={date} style={{padding:"12px 14px",borderBottom:i<thisWeek.length-1?"0.5px solid #f2ede6":"none"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <span style={{fontSize:13,fontWeight:600,color:"#2c2420"}}>{label}</span>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                {custom&&<span style={{fontSize:10,background:"#eef0f8",color:"#4a5a8c",padding:"2px 6px",borderRadius:6}}>Avvikelse</span>}
+                <span style={{fontSize:11,color:"#c4bcaf"}}>{date.slice(8)}/{date.slice(5,7)}</span>
+              </div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <PickupCell emoji="🌅" personId={eff.dropPerson} personName={eff.dropPersonName} onSwap={()=>swapDate(date,dow,"dropPerson")} onOther={()=>openOther(dow,date,"dropPerson")}/>
+              <PickupCell emoji="🌇" personId={eff.pickPerson} personName={eff.pickPersonName} onSwap={()=>swapDate(date,dow,"pickPerson")} onOther={()=>openOther(dow,date,"pickPerson")}/>
+            </div>
+          </div>);
+        })}
+      </Card>
+
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:10,fontWeight:500}}>Standardvecka (mån–fre)</div>
+      <Card style={{marginBottom:16}}>
+        {weekdays.map((dow,i)=>{const slot=data[dow]||{};return(
+          <div key={dow} style={{padding:"12px 14px",borderBottom:i<4?"0.5px solid #f2ede6":"none"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#2c2420",marginBottom:10}}>{WEEKDAYS[dow]}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <PickupCell emoji="🌅" personId={slot.dropPerson} personName={slot.dropPersonName} onSwap={()=>swapWeek(dow,"dropPerson")} onOther={()=>openOther(dow,null,"dropPerson")}/>
+              <PickupCell emoji="🌇" personId={slot.pickPerson} personName={slot.pickPersonName} onSwap={()=>swapWeek(dow,"pickPerson")} onOther={()=>openOther(dow,null,"pickPerson")}/>
+            </div>
+          </div>
+        );})}
+      </Card>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{fontSize:13,color:"#9b9186",fontWeight:500}}>Aktiviteter</div>
+        <button onClick={()=>{setEditAct(null);setActF(defaultActF);setShowAct(true);}} style={{fontSize:12,color:"#b8815a",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4}}><Ic n="plus" s={14} color="#b8815a"/> Lägg till</button>
+      </div>
+      {activities.length===0?<div style={{fontSize:13,color:"#c4bcaf",marginBottom:16}}>Inga aktiviteter inlagda</div>:(
+        <Card style={{marginBottom:16}}>
+          {activities.map((act,i)=>{const p=act.person?PERSONS.find(x=>x.id===act.person):null;const paused=isActPaused(act.id);const pause=actPauses[act.id];return(
+            <div key={act.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:i<activities.length-1?"0.5px solid #f2ede6":"none",opacity:paused?0.6:1}}>
+              <div style={{flex:1}} onClick={()=>openEditAct(act)}>
+                <div style={{fontSize:13,fontWeight:600,color:"#2c2420",cursor:"pointer"}}>{act.childName} · {act.title}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginTop:2,flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,color:"#9b9186"}}>{act.recurring?`Varje ${WEEKDAYS_SHORT[act.dow]}`:act.date?`Engång: ${act.date}`:""}{act.time?` kl ${act.time}`:""}</span>
+                  {act.recurring&&!paused&&<span style={{fontSize:10,background:"#e8f0e8",color:"#5a8c5a",padding:"1px 6px",borderRadius:6}}>Återkommande</span>}
+                  {!act.recurring&&<span style={{fontSize:10,background:"#eef0f8",color:"#4a5a8c",padding:"1px 6px",borderRadius:6}}>Engång</span>}
+                  {paused&&<span style={{fontSize:10,background:"#fff3cd",color:"#b8600d",padding:"1px 6px",borderRadius:6}}>{pause?.indefinite?"Pausad":"Pausad t.o.m. "+pause?.until}</span>}
+                </div>
+              </div>
+              {p&&<Av p={p} s={20}/>}
+              {act.recurring&&(paused
+                ?<button onClick={()=>resumeAct(act.id)} style={{fontSize:11,background:"#e8f0e8",color:"#5a8c5a",border:"none",borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>Återuppta</button>
+                :<button onClick={()=>{setShowPause(act.id);setPauseForm({weeks:"",indefinite:false});}} style={{fontSize:11,background:"#fff3cd",color:"#b8600d",border:"none",borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>Pausa</button>
+              )}
+              <button onClick={()=>setActivities(activities.filter(x=>x.id!==act.id))} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
+            </div>
+          );})}
+        </Card>
+      )}
+
+      {otherDlg&&(<Modal title="Annan ansvarig" onClose={()=>{setOtherDlg(null);setOtherName("");}}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{fontSize:13,color:"#6b6357"}}>T.ex. Mormor, Morfar, Barnvakt</div>
+          <input style={inp} placeholder="Namn" value={otherName} onChange={e=>setOtherName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveOther()} autoFocus/>
+          <button style={btnP} onClick={saveOther}>Spara</button>
+        </div>
+      </Modal>)}
+
+      {showPause&&(
+        <Modal title="Pausa aktivitet" onClose={()=>setShowPause(null)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:13,color:"#6b6357"}}>Pausa t.ex. under sommarlov eller uppehåll.</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {[1,2,4,6,8].map(w=>(
+                <button key={w} onClick={()=>setPauseForm({weeks:w,indefinite:false})} style={{padding:"8px 14px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",background:pauseForm.weeks===w&&!pauseForm.indefinite?"#2c2420":"#ede8e1",color:pauseForm.weeks===w&&!pauseForm.indefinite?"#fff":"#6b6357",border:"none"}}>{w} v</button>
+              ))}
+              <button onClick={()=>setPauseForm({weeks:"",indefinite:true})} style={{padding:"8px 14px",borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit",background:pauseForm.indefinite?"#2c2420":"#ede8e1",color:pauseForm.indefinite?"#fff":"#6b6357",border:"none"}}>Obestämd tid</button>
+            </div>
+            {!pauseForm.indefinite&&<div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Eller ange antal veckor</div>
+              <input style={inp} type="number" placeholder="Antal veckor" value={pauseForm.weeks} onChange={e=>setPauseForm({...pauseForm,weeks:parseInt(e.target.value)||""})}/>
+            </div>}
+            <button style={btnP} onClick={()=>pauseAct(showPause,pauseForm.indefinite?null:pauseForm.weeks,pauseForm.indefinite)} disabled={!pauseForm.indefinite&&!pauseForm.weeks}>Pausa aktivitet</button>
+          </div>
+        </Modal>
+      )}
+
+      {showAct&&(<Modal title={editAct?"Redigera aktivitet":"Ny aktivitet"} onClose={()=>{setShowAct(false);setEditAct(null);}}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <input style={inp} placeholder="Barnets namn" value={actF.childName} onChange={e=>setActF({...actF,childName:e.target.value})}/>
+          <input style={inp} placeholder="Aktivitet (t.ex. Fotboll)" value={actF.title} onChange={e=>setActF({...actF,title:e.target.value})}/>
+
+          {/* Recurring vs one-off */}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setActF({...actF,recurring:true})} style={{flex:1,padding:"10px",borderRadius:12,fontSize:14,cursor:"pointer",fontFamily:"inherit",background:actF.recurring?"#e8f0e8":"#ede8e1",color:actF.recurring?"#3a6b3a":"#6b6357",border:actF.recurring?"1.5px solid #5a8c5a44":"1.5px solid transparent",fontWeight:actF.recurring?500:400}}>🔁 Återkommande</button>
+            <button onClick={()=>setActF({...actF,recurring:false})} style={{flex:1,padding:"10px",borderRadius:12,fontSize:14,cursor:"pointer",fontFamily:"inherit",background:!actF.recurring?"#eef0f8":"#ede8e1",color:!actF.recurring?"#4a5a8c":"#6b6357",border:!actF.recurring?"1.5px solid #4a5a8c44":"1.5px solid transparent",fontWeight:!actF.recurring?500:400}}>📅 Engångstillfälle</button>
+          </div>
+
+          {actF.recurring?(
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Veckodag</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{weekdays.map(d=>(<button key={d} onClick={()=>setActF({...actF,dow:d})} style={{padding:"6px 10px",borderRadius:8,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:actF.dow===d?"#2980b9":"#ede8e1",color:actF.dow===d?"#fff":"#6b6357",border:"none"}}>{WEEKDAYS_SHORT[d]}</button>))}</div>
+            </div>
+          ):(
+            <div><div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Datum</div><input style={inp} type="date" value={actF.date||""} onChange={e=>setActF({...actF,date:e.target.value})}/></div>
+          )}
+
+          <div><div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Tid (valfritt)</div><input style={inp} type="time" value={actF.time} onChange={e=>setActF({...actF,time:e.target.value})}/></div>
+          <PPick val={actF.person} onChange={v=>setActF({...actF,person:v})} label="Vem ansvarar?"/>
+          <button style={btnP} onClick={saveActivity}>Spara aktivitet</button>
+        </div>
+      </Modal>)}
+    </div>
+  );
+}
+
+// ─── KNOWLEDGE ────────────────────────────────────────────────────────────────
+// ─── KNOWLEDGE (rewritten v11) ───────────────────────────────────────────────
+// Data model: { cats: [{id,name,icon}], tags: [{id,label,color}], posts: [{id,catId,title,items:[{id,key,value}],tags:[tagId],updatedAt}] }
+const KNOWLEDGE_DEFAULT_CATS=[
+  {id:"contacts",name:"Kontakter",icon:"📞"},
+  {id:"sizes",name:"Klädstorlekar",icon:"👕"},
+  {id:"notes",name:"Anteckningar",icon:"📝"},
+];
+const KNOWLEDGE_TAG_COLORS=["#b8815a","#5a8c5a","#7b7cb8","#2980b9","#c0392b","#f39c12","#6b6357"];
+
+function Knowledge(){
+  const [data,setData]=useLS(KEYS.knowledge,{
+    cats:KNOWLEDGE_DEFAULT_CATS,
+    tags:[],
+    posts:[
+      {id:1,catId:"contacts",title:"Förskolan Solstrålen",items:[{id:11,key:"Roll",value:"Förskola"},{id:12,key:"Telefon",value:"08-123 45 67"}],tags:[],updatedAt:TODAY},
+      {id:2,catId:"sizes",title:"Barnets kläder",items:[{id:21,key:"Skor",value:"28"},{id:22,key:"Jacka",value:"98"}],tags:[],updatedAt:TODAY},
+      {id:3,catId:"notes",title:"Wifi hemma",items:[{id:31,key:"Nätverk",value:"PeasHome"},{id:32,key:"Lösenord",value:"I 1Password"}],tags:[],updatedAt:TODAY},
+    ],
+  });
+
+  const [activeCat,setActiveCat]=useState("all");
+  const [filterTag,setFilterTag]=useState(null);
+  const [showNewPost,setShowNewPost]=useState(false);
+  const [showNewCat,setShowNewCat]=useState(false);
+  const [showNewTag,setShowNewTag]=useState(false);
+  const [showCatMgr,setShowCatMgr]=useState(false);
+  const [showTagMgr,setShowTagMgr]=useState(false);
+  const [editPostId,setEditPostId]=useState(null); // open post for editing
+  const [expandedPostId,setExpandedPostId]=useState(null);
+  const [newCat,setNewCat]=useState({name:"",icon:"📌"});
+  const [newTag,setNewTag]=useState({label:"",color:KNOWLEDGE_TAG_COLORS[0]});
+  const [postForm,setPostForm]=useState({catId:"contacts",title:"",items:[{id:Date.now(),key:"",value:""}],tags:[]});
+
+  const save=d=>setData(d);
+  const ts=()=>new Date().toISOString().split("T")[0];
+
+  // Posts filtered by cat + tag
+  const visiblePosts=data.posts.filter(p=>{
+    if(activeCat!=="all"&&p.catId!==activeCat)return false;
+    if(filterTag&&!p.tags?.includes(filterTag))return false;
+    return true;
+  }).sort((a,b)=>b.updatedAt?.localeCompare(a.updatedAt||"")||0);
+
+  // Add/update post
+  const savePost=()=>{
+    if(!postForm.title.trim())return;
+    const items=postForm.items.filter(i=>i.key.trim()||i.value.trim());
+    if(editPostId){
+      save({...data,posts:data.posts.map(p=>p.id===editPostId?{...p,...postForm,items,updatedAt:ts()}:p)});
+    } else {
+      save({...data,posts:[...data.posts,{id:Date.now(),...postForm,title:postForm.title.trim(),items,updatedAt:ts()}]});
+    }
+    setShowNewPost(false);setEditPostId(null);
+    setPostForm({catId:activeCat==="all"?"contacts":activeCat,title:"",items:[{id:Date.now(),key:"",value:""}],tags:[]});
+  };
+  const openEdit=post=>{
+    setPostForm({catId:post.catId,title:post.title,items:post.items.length?post.items:[{id:Date.now(),key:"",value:""}],tags:post.tags||[]});
+    setEditPostId(post.id);setShowNewPost(true);
+  };
+  const deletePost=id=>save({...data,posts:data.posts.filter(p=>p.id!==id)});
+
+  // Categories
+  const addCat=()=>{
+    if(!newCat.name.trim())return;
+    const c={id:Date.now().toString(),name:newCat.name.trim(),icon:newCat.icon||"📌"};
+    save({...data,cats:[...data.cats,c]});
+    setNewCat({name:"",icon:"📌"});
+  };
+  const updateCat=(id,patch)=>save({...data,cats:data.cats.map(c=>c.id===id?{...c,...patch}:c)});
+  const deleteCat=id=>{
+    save({...data,cats:data.cats.filter(c=>c.id!==id),posts:data.posts.filter(p=>p.catId!==id)});
+    if(activeCat===id)setActiveCat("all");
+  };
+
+  // Tags
+  const addTag=()=>{
+    if(!newTag.label.trim())return;
+    const t={id:Date.now().toString(),label:newTag.label.trim(),color:newTag.color};
+    save({...data,tags:[...data.tags,t]});
+    setNewTag({label:"",color:KNOWLEDGE_TAG_COLORS[0]});
+  };
+  const deleteTag=id=>save({...data,tags:data.tags.filter(t=>t.id!==id),posts:data.posts.map(p=>({...p,tags:(p.tags||[]).filter(tid=>tid!==id)}))});
+
+  const allCats=[{id:"all",name:"Alla",icon:"🗂"},...data.cats];
+
+  return(
+    <div>
+      <SHdr title="Kunskapsbank" onAdd={()=>{setEditPostId(null);setPostForm({catId:activeCat==="all"?"contacts":activeCat,title:"",items:[{id:Date.now(),key:"",value:""}],tags:[]});setShowNewPost(true);}}>
+        <button onClick={()=>setShowTagMgr(true)} title="Taggar" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="tag" s={18}/></button>
+        <button onClick={()=>setShowCatMgr(true)} title="Kategorier" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="note" s={18}/></button>
+      </SHdr>
+
+      {/* Category tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:10,overflowX:"auto",paddingBottom:4}}>
+        {allCats.map(c=>(
+          <button key={c.id} onClick={()=>setActiveCat(c.id)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:12,
+            background:activeCat===c.id?"#2c2420":"#ede8e1",color:activeCat===c.id?"#fff":"#6b6357",fontWeight:activeCat===c.id?500:400}}>
+            {c.icon} {c.name} <span style={{opacity:.6}}>{c.id==="all"?data.posts.length:data.posts.filter(p=>p.catId===c.id).length}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Tag filter */}
+      {data.tags.length>0&&(
+        <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
+          {data.tags.map(t=>(
+            <button key={t.id} onClick={()=>setFilterTag(filterTag===t.id?null:t.id)} style={{padding:"3px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",
+              background:filterTag===t.id?t.color:"#ede8e1",color:filterTag===t.id?"#fff":"#6b6357",fontWeight:filterTag===t.id?500:400}}>
+              #{t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Posts */}
+      {visiblePosts.length===0&&<Empty n="spark" text="Inga poster – lägg till med + knappen"/>}
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {visiblePosts.map(post=>{
+          const cat=data.cats.find(c=>c.id===post.catId);
+          const isExpanded=expandedPostId===post.id;
+          return(
+            <div key={post.id} style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",overflow:"hidden"}}>
+              {/* Header row */}
+              <div onClick={()=>setExpandedPostId(isExpanded?null:post.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"13px 14px",cursor:"pointer"}}>
+                <span style={{fontSize:18,flexShrink:0}}>{cat?.icon||"📋"}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:600,color:"#2c2420"}}>{post.title}</div>
+                  <div style={{display:"flex",gap:5,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
+                    {(post.tags||[]).map(tid=>{const t=data.tags.find(x=>x.id===tid);return t?<span key={tid} style={{fontSize:10,background:t.color+"22",color:t.color,padding:"1px 7px",borderRadius:10,border:`1px solid ${t.color}44`}}>#{t.label}</span>:null;})}
+                    <span style={{fontSize:10,color:"#c4bcaf",marginLeft:"auto"}}>ändrad {post.updatedAt||""}</span>
+                  </div>
+                </div>
+                <span style={{color:"#c4bcaf",fontSize:14}}>{isExpanded?"▾":"▸"}</span>
+              </div>
+              {/* Expanded content */}
+              {isExpanded&&(
+                <div style={{borderTop:"0.5px solid #f2ede6"}}>
+                  {post.items.map((item,i)=>(
+                    <div key={item.id} style={{display:"flex",gap:10,padding:"9px 14px",borderBottom:i<post.items.length-1?"0.5px solid #f7f4ef":"none"}}>
+                      <span style={{fontSize:12,color:"#9b9186",minWidth:80,flexShrink:0,paddingTop:1}}>{item.key}</span>
+                      <span style={{fontSize:13,color:"#2c2420",flex:1,wordBreak:"break-word"}}>{item.value}</span>
+                    </div>
+                  ))}
+                  <div style={{display:"flex",gap:8,padding:"10px 14px",background:"#f7f4ef"}}>
+                    <button onClick={()=>openEdit(post)} style={{flex:1,padding:"8px",borderRadius:10,background:"#ede8e1",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:"#2c2420",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                      <Ic n="pencil" s={14}/> Redigera
+                    </button>
+                    <button onClick={()=>deletePost(post.id)} style={{width:38,height:38,borderRadius:10,background:"#fdf0ee",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                      <Ic n="trash" s={15} color="#c0392b"/>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* New/Edit post modal */}
+      {showNewPost&&(
+        <Modal title={editPostId?"Redigera post":"Ny post"} onClose={()=>{setShowNewPost(false);setEditPostId(null);}}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <input style={inp} placeholder="Titel / namn" value={postForm.title} onChange={e=>setPostForm({...postForm,title:e.target.value})} autoFocus/>
+
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Kategori</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {data.cats.map(c=>(
+                  <button key={c.id} onClick={()=>setPostForm({...postForm,catId:c.id})} style={{padding:"6px 12px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",border:"none",
+                    background:postForm.catId===c.id?"#2c2420":"#ede8e1",color:postForm.catId===c.id?"#fff":"#6b6357"}}>
+                    {c.icon} {c.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Information (fält)</div>
+              {postForm.items.map((item,i)=>(
+                <div key={item.id} style={{display:"flex",gap:6,marginBottom:6}}>
+                  <input style={{...inp,flex:"0 0 100px",fontSize:13,padding:"8px 10px"}} placeholder="Fält" value={item.key} onChange={e=>setPostForm({...postForm,items:postForm.items.map((x,j)=>j===i?{...x,key:e.target.value}:x)})}/>
+                  <input style={{...inp,flex:1,fontSize:13,padding:"8px 10px"}} placeholder="Värde" value={item.value} onChange={e=>setPostForm({...postForm,items:postForm.items.map((x,j)=>j===i?{...x,value:e.target.value}:x)})}/>
+                  <button onClick={()=>setPostForm({...postForm,items:postForm.items.filter((_,j)=>j!==i)})} style={{width:36,height:38,borderRadius:10,background:"#fdf0ee",border:"none",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                    <Ic n="x" s={15} color="#c0392b"/>
+                  </button>
+                </div>
+              ))}
+              <button onClick={()=>setPostForm({...postForm,items:[...postForm.items,{id:Date.now(),key:"",value:""}]})} style={{fontSize:12,color:"#b8815a",background:"#fbeee6",border:"none",borderRadius:10,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4}}>
+                <Ic n="plus" s={13} color="#b8815a"/> Lägg till fält
+              </button>
+            </div>
+
+            {data.tags.length>0&&(
+              <div>
+                <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Taggar</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {data.tags.map(t=>{
+                    const active=(postForm.tags||[]).includes(t.id);
+                    return(
+                      <button key={t.id} onClick={()=>setPostForm({...postForm,tags:active?(postForm.tags||[]).filter(x=>x!==t.id):[...(postForm.tags||[]),t.id]})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",
+                        background:active?t.color:"#ede8e1",color:active?"#fff":"#6b6357",fontWeight:active?500:400}}>
+                        #{t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <button style={btnP} onClick={savePost}>{editPostId?"Spara ändringar":"Skapa post"}</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Category manager */}
+      {showCatMgr&&(
+        <Modal title="Kategorier" onClose={()=>setShowCatMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {data.cats.map(c=>(
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"9px 12px"}}>
+                <input style={{width:40,textAlign:"center",border:"none",background:"transparent",fontSize:18,cursor:"text"}} value={c.icon} onChange={e=>updateCat(c.id,{icon:e.target.value})}/>
+                <input style={{...inp,flex:1,fontSize:13,padding:"7px 10px"}} value={c.name} onChange={e=>updateCat(c.id,{name:e.target.value})}/>
+                {(
+                  <button onClick={()=>{if(window.confirm(`Ta bort "${c.name}"?`))deleteCat(c.id);}} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="trash" s={15} color="#c0392b"/></button>
+                )}
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8,marginTop:4}}>
+              <input style={{width:48,textAlign:"center",border:"1.5px solid #e2ddd6",borderRadius:10,padding:"8px",fontSize:18,background:"#fff"}} value={newCat.icon} onChange={e=>setNewCat({...newCat,icon:e.target.value})} placeholder="📌"/>
+              <input style={{...inp,flex:1}} placeholder="Ny kategori…" value={newCat.name} onChange={e=>setNewCat({...newCat,name:e.target.value})} onKeyDown={e=>e.key==="Enter"&&addCat()}/>
+              <button onClick={addCat} style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Tag manager */}
+      {showTagMgr&&(
+        <Modal title="Taggar" onClose={()=>setShowTagMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {data.tags.map(t=>(
+              <div key={t.id} style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:18,height:18,borderRadius:"50%",background:t.color,flexShrink:0}}/>
+                <span style={{flex:1,fontSize:14,color:"#2c2420"}}>{t.label}</span>
+                <button onClick={()=>deleteTag(t.id)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8,alignItems:"center",marginTop:4}}>
+              <input style={{...inp,flex:1}} placeholder="Ny tagg…" value={newTag.label} onChange={e=>setNewTag({...newTag,label:e.target.value})} onKeyDown={e=>e.key==="Enter"&&addTag()}/>
+              <div style={{display:"flex",gap:4}}>
+                {KNOWLEDGE_TAG_COLORS.map(c=>(
+                  <button key={c} onClick={()=>setNewTag({...newTag,color:c})} style={{width:22,height:22,borderRadius:"50%",background:c,border:newTag.color===c?"2.5px solid #2c2420":"2.5px solid transparent",cursor:"pointer",padding:0}}/>
+                ))}
+              </div>
+              <button onClick={addTag} style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+const TABS=[
+  {id:"home",label:"Hem",icon:"home"},
+  {id:"grocery",label:"Handel",icon:"cart"},
+  {id:"todo",label:"Att göra",icon:"todo"},
+  {id:"calendar",label:"Kalender",icon:"cal"},
+  {id:"pickup",label:"Hämtning",icon:"child"},
+  {id:"economy",label:"Ekonomi",icon:"wallet"},
+  {id:"info",label:"Info",icon:"spark"},
+];
+
+// ─── PIN LOCK ─────────────────────────────────────────────────────────────────
+function simpleHash(s){let h=0;for(let i=0;i<s.length;i++){h=(Math.imul(31,h)+s.charCodeAt(i))|0;}return h.toString(36);}
+const SESSION_HOURS=10;
+
+function PinLock({onUnlock}){
+  const [storedPin]=useLS(KEYS.pin,null);
+  const [sessionTs]=useLS(KEYS.pinSession,0);
+  const [mode,setMode]=useState(()=>{
+    // Already unlocked recently?
+    if(storedPin&&sessionTs&&(Date.now()-sessionTs)<SESSION_HOURS*3600000)return"unlocked";
+    if(!storedPin)return"setup";
+    return"enter";
+  });
+  const [pin,setPin]=useState("");
+  const [confirm,setConfirm]=useState("");
+  const [err,setErr]=useState("");
+  const [,setStoredPin]=useLS(KEYS.pin,null);
+  const [,setSessionTs]=useLS(KEYS.pinSession,0);
+
+  useEffect(()=>{if(mode==="unlocked")onUnlock();},[mode]);
+
+  const digits="1234567890";
+
+  const handleDigit=d=>{
+    if(mode==="setup"){
+      if(pin.length<6)setPin(p=>p+d);
+    } else if(mode==="confirm"){
+      if(confirm.length<6)setConfirm(p=>p+d);
+    } else {
+      if(pin.length<6)setPin(p=>p+d);
+    }
+  };
+  const handleBack=()=>{
+    if(mode==="setup")setPin(p=>p.slice(0,-1));
+    else if(mode==="confirm")setConfirm(p=>p.slice(0,-1));
+    else setPin(p=>p.slice(0,-1));
+  };
+
+  useEffect(()=>{
+    if(mode==="setup"&&pin.length===4){setMode("confirm");setErr("");}
+  },[pin,mode]);
+
+  useEffect(()=>{
+    if(mode==="confirm"&&confirm.length===4){
+      if(confirm===pin){setStoredPin(simpleHash(pin));setSessionTs(Date.now());setMode("unlocked");}
+      else{setErr("Koderna matchar inte, försök igen");setPin("");setConfirm("");setMode("setup");}
+    }
+  },[confirm,mode]);
+
+  useEffect(()=>{
+    if(mode==="enter"&&pin.length===4){
+      if(simpleHash(pin)===storedPin){setSessionTs(Date.now());setMode("unlocked");}
+      else{setErr("Fel kod");setPin("");}
+    }
+  },[pin,mode,storedPin]);
+
+  const displayPin=mode==="confirm"?confirm:pin;
+  const title=mode==="setup"?"Välj en 4-siffrig PIN":mode==="confirm"?"Bekräfta PIN":"2 Peas in a Pod";
+  const subtitle=mode==="setup"?"PIN används för att skydda appen":mode==="confirm"?"Ange PIN igen":null;
+
+  return(
+    <div style={{minHeight:"100vh",background:"#2c2420",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:"#f7f4ef",marginBottom:4}}>
+        2 Peas <span style={{fontStyle:"italic",color:"#b8815a"}}>in a Pod</span>
+      </div>
+      {subtitle&&<div style={{fontSize:13,color:"#9b9186",marginBottom:32,textAlign:"center"}}>{subtitle}</div>}
+      {!subtitle&&<div style={{marginBottom:32}}/>}
+
+      {/* PIN dots */}
+      <div style={{display:"flex",gap:16,marginBottom:12}}>
+        {[0,1,2,3].map(i=>(
+          <div key={i} style={{width:18,height:18,borderRadius:"50%",background:displayPin.length>i?"#b8815a":"rgba(255,255,255,0.15)",transition:"background .15s"}}/>
+        ))}
+      </div>
+
+      {err&&<div style={{fontSize:13,color:"#e74c3c",marginBottom:12}}>{err}</div>}
+      {!err&&<div style={{height:20,marginBottom:12}}/>}
+
+      {/* Numpad */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,72px)",gap:12}}>
+        {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i)=>(
+          <button key={i} onClick={()=>d==="⌫"?handleBack():d!==""&&handleDigit(String(d))}
+            disabled={d===""}
+            style={{width:72,height:72,borderRadius:"50%",background:d===""?"transparent":d==="⌫"?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.1)",
+              border:"none",color:"#f7f4ef",fontSize:d==="⌫"?20:24,fontWeight:300,cursor:d===""?"default":"pointer",
+              fontFamily:"inherit",transition:"background .1s"}}>
+            {d}
+          </button>
+        ))}
+      </div>
+
+      {mode==="enter"&&storedPin&&(
+        <button onClick={()=>{if(confirm(/*window.confirm*/"Är du säker? PIN-koden återställs och en ny måste sättas.")){}
+          // just reset
+          setStoredPin(null);setPin("");setMode("setup");
+        }} style={{marginTop:32,fontSize:12,color:"#9b9186",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>
+          Glömt PIN? Återställ
+        </button>
+      )}
+    </div>
+  );
+}
+
+function App(){
+  const [unlocked,setUnlocked]=useState(false);
+  const [tab,setTab]=useState("home");
+  const [viewer,setViewer]=useViewer();
+  const [todos]=useLS(KEYS.todo,[]);
+  const [userEvents]=useLS(KEYS.events,[]);
+  const [pickupData,setPickupData]=useLS(KEYS.pickup,DEFAULT_PICKUP);
+  const [activities]=useLS(KEYS.activities,[]);
+  const [expiryItems]=useLS(KEYS.expiry,[]);
+  const [pickupEnabled,setPickupEnabled]=useLS(KEYS.pickupEnabled,true);
+  const [actPausesApp]=useLS(KEYS.actPauses,{});
+  const dateStr=new Date().toLocaleDateString("sv-SE",{weekday:"long",day:"numeric",month:"long"});
+  const [showHH,setShowHH]=useState(false);
+  const [joinCode,setJoinCode]=useState("");
+  const doJoin=()=>{
+    const c=joinCode.trim();
+    if(!c.startsWith("hh_")||c.length<10){alert("Ogiltig kod — ska börja med hh_ och vara minst 10 tecken.");return;}
+    if(!window.confirm("Byt till hushåll "+c+"? Din lokala data ersätts av hushållets data."))return;
+    localStorage.setItem("peas_household_id",c);
+    window.location.reload();
+  };
+
+  if(!unlocked)return <PinLock onUnlock={()=>setUnlocked(true)}/>;
+
+  return(
+    <div style={{fontFamily:"'DM Sans',sans-serif",background:"#f7f4ef",minHeight:"100vh",maxWidth:480,margin:"0 auto"}}>
+      <div style={{padding:"52px 20px 14px",background:"#f7f4ef",position:"sticky",top:0,zIndex:10,borderBottom:"0.5px solid #ede8e1"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",lineHeight:1}}>2 Peas <span style={{fontStyle:"italic",color:"#b8815a"}}>in a Pod</span></div>
+            <div style={{fontSize:12,color:"#9b9186",marginTop:3}}>{dateStr}</div>
+          </div>
+          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+            <button onClick={()=>setShowHH(v=>!v)} title="Hushållskod" style={{background:"none",border:"none",cursor:"pointer",padding:4,color:"#9b9186",display:"flex",alignItems:"center"}}><Ic n="home" s={18}/></button>
+            {PERSONS.map(p=>(<button key={p.id} onClick={()=>setViewer(p.id)} title={`Jag är ${p.label}`} style={{width:34,height:34,borderRadius:"50%",border:viewer===p.id?`2px solid ${p.color}`:"2px solid transparent",background:p.bg,cursor:"pointer",padding:0,display:"flex",alignItems:"center",justifyContent:"center"}}><Av p={p} s={24}/></button>))}
+          </div>
+        </div>
+      </div>
+      {showHH&&(
+        <div style={{margin:"0 14px",background:"#fff",border:"0.5px solid #e2ddd6",borderRadius:16,padding:16,display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#9b9186",letterSpacing:.4}}>HUSHÅLLSKOD</div>
+          <div style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
+            <span style={{flex:1,fontSize:12,fontFamily:"monospace",color:"#2c2420",wordBreak:"break-all"}}>{HOUSEHOLD_ID}</span>
+            <button onClick={()=>{navigator.clipboard.writeText(HOUSEHOLD_ID);}} style={{background:"#b8815a",border:"none",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Kopiera</button>
+          </div>
+          <div style={{fontSize:11,color:"#9b9186"}}>Dela den här koden med din partner så synkas all data automatiskt.</div>
+          <div style={{borderTop:"0.5px solid #f2ede6",paddingTop:10}}>
+            <div style={{fontSize:12,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>GÅ MED I ANNAT HUSHÅLL</div>
+            <div style={{display:"flex",gap:6}}>
+              <input style={{flex:1,border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 10px",fontSize:12,fontFamily:"monospace",outline:"none",background:"#f7f4ef",color:"#2c2420"}}
+                placeholder="hh_xxxxxxxx" value={joinCode} onChange={e=>setJoinCode(e.target.value)}/>
+              <button onClick={doJoin} style={{background:"#5a8c5a",border:"none",borderRadius:10,padding:"8px 12px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>Anslut</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={{display:"flex",background:"#ede8e1",margin:"0 14px",borderRadius:"0 0 18px 18px",padding:"4px",gap:2,overflowX:"auto"}}>
+        {TABS.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{flexShrink:0,flex:"1 0 auto",background:tab===t.id?"#f7f4ef":"transparent",border:"none",borderRadius:14,padding:"8px 4px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",color:tab===t.id?"#2c2420":"#9b9186",fontWeight:tab===t.id?500:400,fontSize:10,display:"flex",flexDirection:"column",alignItems:"center",gap:3,boxShadow:tab===t.id?"0 1px 4px rgba(0,0,0,0.08)":"none",transition:"all .15s",minWidth:50}}><Ic n={t.icon} s={17}/>{t.label}</button>))}
+      </div>
+      <div style={{padding:"20px 14px 100px"}}>
+        {tab==="home"    &&<Briefing todos={todos} userEvents={userEvents} pickupData={pickupEnabled?pickupData:{}} activities={activities} expiryItems={expiryItems} viewerId={viewer} navigateTo={setTab} pickupEnabled={pickupEnabled} actPauses={actPausesApp}/>}
+        {tab==="grocery" &&<Grocery/>}
+        {tab==="todo"    &&<Todo viewerId={viewer}/>}
+        {tab==="calendar"&&<Calendar/>}
+        {tab==="pickup"  &&<Pickup data={pickupData} setData={setPickupData} pickupEnabled={pickupEnabled} setPickupEnabled={setPickupEnabled}/>}
+        {tab==="economy" &&<Economy/>}
+        {tab==="info"    &&<Knowledge/>}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
