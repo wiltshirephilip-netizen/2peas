@@ -11,8 +11,8 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet"/>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 body{background:#f7f4ef;font-family:'DM Sans',sans-serif;}
@@ -39,7 +39,7 @@ const KEYS={
 // ─── Supabase ────────────────────────────────────────────────────────────────
 const SUPA_URL="https://vusljzywhlpjmzznewkq.supabase.co";
 const SUPA_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ1c2xqenl3aGxwam16em5ld2txIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTEyMjMsImV4cCI6MjA5NzI4NzIyM30.zZS6C7wsnEaSSsn749NmhyH1InIQ0t1HcO16pg7NWk8";
-const supa=supabase.createClient(SUPA_URL,SUPA_KEY);
+const supa=window.supabase.createClient(SUPA_URL,SUPA_KEY);
 
 // Hushålls-ID: sparas lokalt per enhet, delas via inbjudningskod
 function getHouseholdId(){
