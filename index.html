@@ -71,33 +71,61 @@ async function dbSet(key,value){
 
 function useLS(key,init){
   const isLocal=LOCAL_ONLY.has(key);
+
+  // Starta alltid från localStorage — ingen blinkning
   const [v,setV]=useState(()=>{
     try{const s=localStorage.getItem(key);return s?JSON.parse(s):init;}catch{return init;}
   });
-  const loaded=React.useRef(isLocal);
 
+  const loaded=React.useRef(isLocal);
+  // Håll koll på vad vi själva senast sparade för att ignorera egna realtidshändelser
+  const lastSaved=React.useRef(undefined);
+
+  // Initial laddning från Supabase (en gång vid mount)
   useEffect(()=>{
     if(isLocal)return;
     dbGet(key).then(val=>{
-      if(val!==null)setV(val);
+      if(val!==null){
+        // Uppdatera bara om Supabase har ett nyare värde än localStorage
+        const localRaw=localStorage.getItem(key);
+        const local=localRaw?JSON.parse(localRaw):init;
+        const localStr=JSON.stringify(local);
+        const supaStr=JSON.stringify(val);
+        if(supaStr!==localStr){
+          setV(val);
+          localStorage.setItem(key,supaStr);
+        }
+      }
       loaded.current=true;
     }).catch(()=>{loaded.current=true;});
   },[key]);
 
+  // Spara till localStorage + Supabase vid ändringar (optimistic — localStorage först)
   useEffect(()=>{
     if(!loaded.current)return;
-    localStorage.setItem(key,JSON.stringify(v));
-    if(!isLocal)dbSet(key,v);
+    const str=JSON.stringify(v);
+    localStorage.setItem(key,str);
+    if(!isLocal){
+      lastSaved.current=str;
+      dbSet(key,v);
+    }
   },[key,v]);
 
-  // Realtidssynk
+  // Realtidssynk från partnerns ändringar — ignorera egna sparningar
   useEffect(()=>{
     if(isLocal)return;
     const dbKey=key+"__"+HID;
     const ch=window._supa.channel("rt_"+dbKey)
       .on("postgres_changes",
         {event:"*",schema:"public",table:"household_data",filter:"id=eq."+dbKey},
-        payload=>{if(payload.new?.value!==undefined)setV(payload.new.value);}
+        payload=>{
+          if(payload.new?.value===undefined)return;
+          const incoming=JSON.stringify(payload.new.value);
+          // Ignorera om det är vårt eget senaste sparade värde
+          if(incoming===lastSaved.current)return;
+          setV(payload.new.value);
+          localStorage.setItem(key,incoming);
+        }
       ).subscribe();
     return()=>window._supa.removeChannel(ch);
   },[key]);
