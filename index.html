@@ -60,13 +60,20 @@ async function dbGet(key){
     return data.value;
   }catch(e){return null;}
 }
+
+
+// Räknar pågående Supabase-sparningar globalt
+window._pendingSaves=window._pendingSaves||0;
+
 async function dbSet(key,value){
   try{
+    window._pendingSaves++;
     await window._supa.from("household_data").upsert(
       {id:key+"__"+HID,household_id:HID,value,updated_at:new Date().toISOString()},
       {onConflict:"id"}
     );
   }catch(e){console.warn("dbSet:",e);}
+  finally{window._pendingSaves=Math.max(0,window._pendingSaves-1);}
 }
 
 function useLS(key,init){
@@ -78,18 +85,16 @@ function useLS(key,init){
   });
 
   const loaded=React.useRef(isLocal);
-  // Håll koll på vad vi själva senast sparade för att ignorera egna realtidshändelser
   const lastSaved=React.useRef(undefined);
+  const debounceTimer=React.useRef(null);
 
-  // Initial laddning från Supabase (en gång vid mount)
+  // Initial laddning från Supabase
   useEffect(()=>{
     if(isLocal)return;
     dbGet(key).then(val=>{
       if(val!==null){
-        // Uppdatera bara om Supabase har ett nyare värde än localStorage
         const localRaw=localStorage.getItem(key);
-        const local=localRaw?JSON.parse(localRaw):init;
-        const localStr=JSON.stringify(local);
+        const localStr=localRaw||JSON.stringify(init);
         const supaStr=JSON.stringify(val);
         if(supaStr!==localStr){
           setV(val);
@@ -100,18 +105,19 @@ function useLS(key,init){
     }).catch(()=>{loaded.current=true;});
   },[key]);
 
-  // Spara till localStorage + Supabase vid ändringar (optimistic — localStorage först)
+  // Spara: localStorage omedelbart, Supabase efter 600ms debounce
   useEffect(()=>{
     if(!loaded.current)return;
     const str=JSON.stringify(v);
     localStorage.setItem(key,str);
-    if(!isLocal){
-      lastSaved.current=str;
-      dbSet(key,v);
-    }
+    if(isLocal)return;
+    lastSaved.current=str;
+    if(debounceTimer.current)clearTimeout(debounceTimer.current);
+    debounceTimer.current=setTimeout(()=>{dbSet(key,v);},600);
+    return()=>{if(debounceTimer.current)clearTimeout(debounceTimer.current);};
   },[key,v]);
 
-  // Realtidssynk från partnerns ändringar — ignorera egna sparningar
+  // Realtidssynk från partner
   useEffect(()=>{
     if(isLocal)return;
     const dbKey=key+"__"+HID;
@@ -121,7 +127,6 @@ function useLS(key,init){
         payload=>{
           if(payload.new?.value===undefined)return;
           const incoming=JSON.stringify(payload.new.value);
-          // Ignorera om det är vårt eget senaste sparade värde
           if(incoming===lastSaved.current)return;
           setV(payload.new.value);
           localStorage.setItem(key,incoming);
@@ -2752,6 +2757,19 @@ function App(){
   const [pickupEnabled,setPickupEnabled]=useLS(KEYS.pickupEnabled,true);
   const [actPausesApp]=useLS(KEYS.actPauses,{});
   const dateStr=new Date().toLocaleDateString("sv-SE",{weekday:"long",day:"numeric",month:"long"});
+
+  // Varna om användaren försöker lämna sidan med osparade ändringar
+  useEffect(()=>{
+    const handler=e=>{
+      if(window._pendingSaves>0){
+        e.preventDefault();
+        e.returnValue="Data håller på att sparas. Vänta ett ögonblick innan du laddar om.";
+        return e.returnValue;
+      }
+    };
+    window.addEventListener("beforeunload",handler);
+    return()=>window.removeEventListener("beforeunload",handler);
+  },[]);
   const [showHH,setShowHH]=useState(false);
   const [joinCode,setJoinCode]=useState("");
   const doJoin=()=>{
