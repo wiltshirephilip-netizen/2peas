@@ -35,7 +35,7 @@ const { useState, useEffect, useRef } = React;
 const KEYS={
   grocery:"peas_grocery",groceryCats:"peas_gcats",groceryTemplates:"peas_gtpl",noticeboard:"peas_board",todo:"peas_todo",events:"peas_events",
   expenses:"peas_expenses",settled:"peas_settled",pickup:"peas_pickup",
-  viewer:"peas_viewer",expiry:"peas_expiry",recipes:"peas_recipes",
+  viewer:"peas_viewer",expiry:"peas_expiry",recipes:"peas_recipes",recipeAmbition:"peas_rec_amb",recipeTime:"peas_rec_time",
   activities:"peas_activities",knowledge:"peas_knowledge",budget:"peas_budget",
   budgetTemplates:"peas_budget_tpl",budgetSettled:"peas_budget_settled",
   pin:"peas_pin",pinSession:"peas_pin_session",pickupEnabled:"peas_pickup_enabled",
@@ -834,6 +834,13 @@ function Grocery(){
   const [showRecipeForm,setShowRecipeForm]=useState(false);
   const [editRecipe,setEditRecipe]=useState(null);
   const [recipeFilter,setRecipeFilter]=useState({ambition:"",time:"",minRating:0});
+  const [recipeSearch,setRecipeSearch]=useState("");
+  const [showFilterEdit,setShowFilterEdit]=useState(false);
+  const [customAmbition,setCustomAmbition]=useLS(KEYS.recipeAmbition,null);
+  const [customTime,setCustomTime]=useLS(KEYS.recipeTime,null);
+  const [filterEditForm,setFilterEditForm]=useState(null);
+  const ambitionOpts=customAmbition||RECIPE_AMBITION;
+  const timeOpts=customTime||RECIPE_TIME;
   const [showCatMgr,setShowCatMgr]=useState(false);
   const [newCatName,setNewCatName]=useState("");
   const [editItemId,setEditItemId]=useState(null);
@@ -883,6 +890,14 @@ function Grocery(){
     if(recipeFilter.ambition&&r.ambition!==recipeFilter.ambition)return false;
     if(recipeFilter.time&&r.time!==recipeFilter.time)return false;
     if(recipeFilter.minRating&&(r.rating||0)<recipeFilter.minRating)return false;
+    if(recipeSearch.trim()){
+      const q=recipeSearch.toLowerCase();
+      const inTitle=r.title?.toLowerCase().includes(q);
+      const inDesc=r.description?.toLowerCase().includes(q);
+      const inIngr=(r.ingredients||[]).some(i=>i.name?.toLowerCase().includes(q));
+      const inTags=(r.tags||[]).some(t=>t.toLowerCase().includes(q));
+      if(!inTitle&&!inDesc&&!inIngr&&!inTags)return false;
+    }
     return true;
   });
 
@@ -939,19 +954,80 @@ function Grocery(){
         <button onClick={()=>setSub("list")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Inköpslista</button>
         <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Recept</button>
       </div>
-      <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setShowRecipeForm(true);}}/>
+      <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setShowRecipeForm(true);}} extra={
+        <button onClick={()=>setShowFilterEdit(true)} style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="adjustments" s={17}/></button>
+      }/>
+      <div style={{padding:"0 14px 10px",display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{flex:1,display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:12,padding:"8px 12px"}}>
+          <Ic n="search" s={16} color="#9b9186"/>
+          <input style={{flex:1,border:"none",outline:"none",background:"transparent",fontSize:13,color:"#2c2420",fontFamily:"inherit"}} placeholder="Sök recept, ingrediens…" value={recipeSearch} onChange={e=>setRecipeSearch(e.target.value)}/>
+          {recipeSearch&&<button onClick={()=>setRecipeSearch("")} style={{background:"none",border:"none",cursor:"pointer",padding:0,color:"#9b9186"}}><Ic n="x" s={14}/></button>}
+        </div>
+      </div>
       <div style={{marginBottom:14}}>
         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
           <span style={{fontSize:11,color:"#9b9186",alignSelf:"center"}}>Filtrera:</span>
-          {RECIPE_AMBITION.map(a=>(<button key={a.id} onClick={()=>setRecipeFilter(f=>({...f,ambition:f.ambition===a.id?"":a.id}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.ambition===a.id?a.bg:"#ede8e1",color:recipeFilter.ambition===a.id?a.color:"#6b6357",border:"none"}}>{a.label}</button>))}
+          {ambitionOpts.map(a=>(<button key={a.id} onClick={()=>setRecipeFilter(f=>({...f,ambition:f.ambition===a.id?"":a.id}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.ambition===a.id?(a.bg||"#2c2420"):"#ede8e1",color:recipeFilter.ambition===a.id?(a.color||"#fff"):"#6b6357",border:"none"}}>{a.label}</button>))}
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {RECIPE_TIME.map(t=>(<button key={t.id} onClick={()=>setRecipeFilter(f=>({...f,time:f.time===t.id?"":t.id}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.time===t.id?"#2c2420":"#ede8e1",color:recipeFilter.time===t.id?"#fff":"#6b6357",border:"none"}}>{t.label}</button>))}
+          {timeOpts.map(t=>(<button key={t.id} onClick={()=>setRecipeFilter(f=>({...f,time:f.time===t.id?"":t.id}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.time===t.id?"#2c2420":"#ede8e1",color:recipeFilter.time===t.id?"#fff":"#6b6357",border:"none"}}>{t.label}</button>))}
           {[3,4,5].map(n=>(<button key={n} onClick={()=>setRecipeFilter(f=>({...f,minRating:f.minRating===n?0:n}))} style={{padding:"4px 10px",borderRadius:16,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:recipeFilter.minRating===n?"#f39c12":"#ede8e1",color:recipeFilter.minRating===n?"#fff":"#6b6357",border:"none"}}>{"★".repeat(n)}+</button>))}
         </div>
       </div>
       {filteredRecipes.length===0&&<Empty n="spark" text={recipes.length===0?"Spara ert första recept!":"Inga recept matchar filtret"}/>}
       {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} onAddToList={addFromRecipe} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
+      {showFilterEdit&&(
+        <Modal title="Redigera filter" onClose={()=>setShowFilterEdit(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>AMBITIONSNIVÅER</div>
+              {(filterEditForm?filterEditForm.ambition:ambitionOpts).map((a,i)=>(
+                <div key={i} style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
+                  <input style={{...inp,flex:2,padding:"6px 10px",fontSize:13}} value={a.label} onChange={e=>{
+                    const arr=(filterEditForm?filterEditForm.ambition:[...ambitionOpts]).map((x,j)=>j===i?{...x,label:e.target.value}:x);
+                    setFilterEditForm(f=>({...(f||{ambition:ambitionOpts,time:timeOpts}),ambition:arr}));
+                  }}/>
+                  <button onClick={()=>{
+                    const arr=(filterEditForm?filterEditForm.ambition:[...ambitionOpts]).filter((_,j)=>j!==i);
+                    setFilterEditForm(f=>({...(f||{ambition:ambitionOpts,time:timeOpts}),ambition:arr}));
+                  }} style={{background:"none",border:"none",cursor:"pointer",padding:4}}><Ic n="trash" s={15} color="#c0392b"/></button>
+                </div>
+              ))}
+              <button onClick={()=>{
+                const arr=[...(filterEditForm?filterEditForm.ambition:ambitionOpts),{id:"opt_"+Date.now(),label:"Ny nivå",color:"#888",bg:"#ede8e1"}];
+                setFilterEditForm(f=>({...(f||{ambition:ambitionOpts,time:timeOpts}),ambition:arr}));
+              }} style={{fontSize:12,color:"#b8815a",background:"none",border:"none",cursor:"pointer",padding:"4px 0",fontFamily:"inherit"}}>+ Lägg till nivå</button>
+            </div>
+            <div>
+              <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>TIDSALTERNATIV</div>
+              {(filterEditForm?filterEditForm.time:timeOpts).map((t,i)=>(
+                <div key={i} style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
+                  <input style={{...inp,flex:2,padding:"6px 10px",fontSize:13}} value={t.label} onChange={e=>{
+                    const arr=(filterEditForm?filterEditForm.time:[...timeOpts]).map((x,j)=>j===i?{...x,label:e.target.value}:x);
+                    setFilterEditForm(f=>({...(f||{ambition:ambitionOpts,time:timeOpts}),time:arr}));
+                  }}/>
+                  <button onClick={()=>{
+                    const arr=(filterEditForm?filterEditForm.time:[...timeOpts]).filter((_,j)=>j!==i);
+                    setFilterEditForm(f=>({...(f||{ambition:ambitionOpts,time:timeOpts}),time:arr}));
+                  }} style={{background:"none",border:"none",cursor:"pointer",padding:4}}><Ic n="trash" s={15} color="#c0392b"/></button>
+                </div>
+              ))}
+              <button onClick={()=>{
+                const arr=[...(filterEditForm?filterEditForm.time:timeOpts),{id:"t_"+Date.now(),label:"Nytt alternativ"}];
+                setFilterEditForm(f=>({...(f||{ambition:ambitionOpts,time:timeOpts}),time:arr}));
+              }} style={{fontSize:12,color:"#b8815a",background:"none",border:"none",cursor:"pointer",padding:"4px 0",fontFamily:"inherit"}}>+ Lägg till alternativ</button>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{setCustomAmbition(null);setCustomTime(null);setFilterEditForm(null);}} style={{flex:1,padding:"10px",borderRadius:12,background:"#ede8e1",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,color:"#6b6357"}}>Återställ standard</button>
+              <button onClick={()=>{
+                if(filterEditForm){setCustomAmbition(filterEditForm.ambition);setCustomTime(filterEditForm.time);}
+                setFilterEditForm(null);setShowFilterEdit(false);
+              }} style={{...btnP,flex:2}}>Spara filter</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {showRecipeForm&&(
         <Modal title={editRecipe?"Redigera recept":"Nytt recept"} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}>
           <RecipeForm
