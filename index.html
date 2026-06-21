@@ -715,7 +715,7 @@ function StarRating({value,onChange,size=18}){
 
 function parseIngLine(line){const t=line.trim();if(!t)return null;const m=t.match(/^(.+?)[,;]\s*(.+)$/);return m?{name:m[1].trim(),qty:m[2].trim()}:{name:t,qty:""};}
 
-function RecipeForm({initial,onSave,onClose}){
+function RecipeForm({initial,onSave,onClose,ambitionOpts=RECIPE_AMBITION,timeOpts=RECIPE_TIME}){
   const [f,setF]=useState(()=>initial||{title:"",url:"",ambition:"enkel",price:"normal",time:"medium",rating:0,ingredientsText:""});
   const save=()=>{
     if(!f.title.trim())return;
@@ -731,13 +731,13 @@ function RecipeForm({initial,onSave,onClose}){
       <div>
         <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Ambitionsnivå</div>
         <div style={{display:"flex",gap:8}}>
-          {RECIPE_AMBITION.map(a=>(<button key={a.id} onClick={()=>setF({...f,ambition:a.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.ambition===a.id?a.bg:"#ede8e1",color:f.ambition===a.id?a.color:"#6b6357",border:f.ambition===a.id?`1.5px solid ${a.color}44`:"1.5px solid transparent"}}>{a.label}</button>))}
+          {ambitionOpts.map(a=>(<button key={a.id} onClick={()=>setF({...f,ambition:a.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.ambition===a.id?(a.bg||"#b8815a"):"#ede8e1",color:f.ambition===a.id?(a.color||"#fff"):"#6b6357",border:f.ambition===a.id?`1.5px solid ${(a.color||"#b8815a")}44`:"1.5px solid transparent"}}>{a.label}</button>))}
         </div>
       </div>
       <div>
         <div style={{fontSize:12,color:"#9b9186",marginBottom:6}}>Tillagningstid</div>
         <div style={{display:"flex",gap:8}}>
-          {RECIPE_TIME.map(t=>(<button key={t.id} onClick={()=>setF({...f,time:t.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.time===t.id?"#2c2420":"#ede8e1",color:f.time===t.id?"#fff":"#6b6357",border:"none"}}>{t.label}</button>))}
+          {timeOpts.map(t=>(<button key={t.id} onClick={()=>setF({...f,time:t.id})} style={{flex:1,padding:"8px 4px",borderRadius:10,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:f.time===t.id?"#2c2420":"#ede8e1",color:f.time===t.id?"#fff":"#6b6357",border:"none"}}>{t.label}</button>))}
         </div>
       </div>
       <div>
@@ -759,10 +759,10 @@ function RecipeForm({initial,onSave,onClose}){
   );
 }
 
-function RecipeCard({r,onAddToList,onEdit,onDelete}){
+function RecipeCard({r,onAddToList,onEdit,onDelete,ambitionOpts=RECIPE_AMBITION,timeOpts=RECIPE_TIME}){
   const [open,setOpen]=useState(false);
-  const amb=RECIPE_AMBITION.find(a=>a.id===r.ambition);
-  const ti=RECIPE_TIME.find(t=>t.id===r.time);
+  const amb=ambitionOpts.find(a=>a.id===r.ambition);
+  const ti=timeOpts.find(t=>t.id===r.time);
   return(
     <div style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",marginBottom:10,overflow:"hidden"}}>
       <div style={{padding:"14px 16px",display:"flex",alignItems:"flex-start",gap:12}}>
@@ -977,7 +977,7 @@ function Grocery(){
         </div>
       </div>
       {filteredRecipes.length===0&&<Empty n="spark" text={recipes.length===0?"Spara ert första recept!":"Inga recept matchar filtret"}/>}
-      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} onAddToList={addFromRecipe} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
+      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} ambitionOpts={ambitionOpts} timeOpts={timeOpts} onAddToList={addFromRecipe} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
       {showFilterEdit&&(
         <Modal title="Redigera filter" onClose={()=>setShowFilterEdit(false)}>
           <div style={{display:"flex",flexDirection:"column",gap:16}}>
@@ -1033,6 +1033,7 @@ function Grocery(){
       {showRecipeForm&&(
         <Modal title={editRecipe?"Redigera recept":"Nytt recept"} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}>
           <RecipeForm
+            ambitionOpts={ambitionOpts} timeOpts={timeOpts}
             initial={editRecipe?(()=>{const r=recipes.find(r=>r.id===editRecipe);return r?{...r,ingredientsText:(r.ingredients||[]).map(i=>i.qty?`${i.name}, ${i.qty}`:i.name).join("\n")}:null;})():null}
             onSave={saveRecipe} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}
           />
