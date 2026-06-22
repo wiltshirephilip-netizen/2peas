@@ -834,6 +834,57 @@ function Grocery(){
   const nameRef=useRef(null);
   const [showClearAll,setShowClearAll]=useState(false);
   const [showRecipeForm,setShowRecipeForm]=useState(false);
+  const [showImport,setShowImport]=useState(false);
+  const [importUrl,setImportUrl]=useState("");
+  const [importLoading,setImportLoading]=useState(false);
+  const [importError,setImportError]=useState("");
+
+  const importRecipe=async()=>{
+    const url=importUrl.trim();
+    if(!url)return;
+    setImportLoading(true);
+    setImportError("");
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:1000,
+          system:"Du är en assistent som extraherar receptinformation från webbsidor. Svara ENDAST med ett JSON-objekt utan markdown eller backticks. JSON-objektet ska ha exakt dessa fält: title (string), description (string, 1-2 meningar), time (string, t.ex. '30 min'), servings (number), ingredients (array av {name, qty} objekt), steps (array av strings). Gissa rimliga värden om något saknas.",
+          messages:[{role:"user",content:"Hämta och extrahera receptet från denna URL: "+url+". Om du inte kan hämta sidan direkt, använd din kunskap om receptet om URL:en är välkänd. Returnera BARA JSON, inget annat."}]
+        })
+      });
+      const data=await res.json();
+      const text=data.content?.[0]?.text||"";
+      const clean=text.replace(/```json|```/g,"").trim();
+      const recipe=JSON.parse(clean);
+      // Spara direkt i receptboken
+      const newRecipe={
+        id:Date.now(),
+        title:recipe.title||"Importerat recept",
+        description:recipe.description||"",
+        time:recipe.time||"",
+        servings:recipe.servings||4,
+        ingredients:(recipe.ingredients||[]).map((ing,i)=>({id:i+1,name:ing.name||ing,qty:ing.qty||""})),
+        steps:recipe.steps||[],
+        ambition:"",
+        rating:0,
+        tags:[],
+        sourceUrl:url,
+      };
+      setRecipes(prev=>[newRecipe,...prev]);
+      setShowImport(false);
+      setImportUrl("");
+      // Öppna receptet för granskning
+      setEditRecipe(newRecipe.id);
+      setShowRecipeForm(true);
+    }catch(e){
+      setImportError("Kunde inte hämta receptet. Kontrollera URL:en och försök igen.");
+      console.error(e);
+    }
+    setImportLoading(false);
+  };
   const [editRecipe,setEditRecipe]=useState(null);
   const [recipeFilter,setRecipeFilter]=useState({ambition:"",time:"",minRating:0});
   const [recipeSearch,setRecipeSearch]=useState("");
@@ -978,6 +1029,36 @@ function Grocery(){
       </div>
       {filteredRecipes.length===0&&<Empty n="spark" text={recipes.length===0?"Spara ert första recept!":"Inga recept matchar filtret"}/>}
       {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} ambitionOpts={ambitionOpts} timeOpts={timeOpts} onAddToList={addFromRecipe} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
+      {showImport&&(
+        <Modal title="Importera recept" onClose={()=>{setShowImport(false);setImportUrl("");setImportError("");}}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{fontSize:13,color:"#6b6357",lineHeight:1.5}}>Klistra in en länk till ett recept så hämtar AI:n automatiskt ingredienser, steg och info.</div>
+            <input
+              style={{...inp,fontSize:13}}
+              placeholder="https://www.ica.se/recept/..."
+              value={importUrl}
+              onChange={e=>setImportUrl(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&!importLoading&&importRecipe()}
+              autoFocus
+            />
+            {importError&&<div style={{fontSize:12,color:"#c0392b",background:"#fdf0ee",borderRadius:8,padding:"8px 12px"}}>{importError}</div>}
+            <button
+              onClick={importRecipe}
+              disabled={!importUrl.trim()||importLoading}
+              style={{...btnP,opacity:(!importUrl.trim()||importLoading)?0.5:1,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+            >
+              {importLoading?(
+                <React.Fragment>
+                  <span style={{display:"inline-block",width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+                  Hämtar recept…
+                </React.Fragment>
+              ):"Importera recept"}
+            </button>
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>
+        </Modal>
+      )}
+
       {showFilterEdit&&(
         <Modal title="Redigera filter" onClose={()=>setShowFilterEdit(false)}>
           <div style={{display:"flex",flexDirection:"column",gap:16}}>
