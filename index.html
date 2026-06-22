@@ -1005,7 +1005,7 @@ function Grocery(){
     <div>
       <div style={{display:"flex",gap:8,marginBottom:16}}>
         <button onClick={()=>setSub("list")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Inköpslista</button>
-        <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Recept</button>
+        <button onClick={()=>setSub("recipes")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Recept</button>
       </div>
       <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setShowRecipeForm(true);}} extra={
         <React.Fragment>
