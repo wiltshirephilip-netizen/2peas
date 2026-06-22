@@ -845,28 +845,37 @@ function Grocery(){
     setImportLoading(true);
     setImportError("");
     try{
+      // Använd web_search-verktyget för att hämta receptsidan
       const res=await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           model:"claude-sonnet-4-6",
-          max_tokens:1000,
-          system:"Du är en assistent som extraherar receptinformation från webbsidor. Svara ENDAST med ett JSON-objekt utan markdown eller backticks. JSON-objektet ska ha exakt dessa fält: title (string), description (string, 1-2 meningar), time (string, t.ex. '30 min'), servings (number), ingredients (array av {name, qty} objekt), steps (array av strings). Gissa rimliga värden om något saknas.",
-          messages:[{role:"user",content:"Hämta och extrahera receptet från denna URL: "+url+". Om du inte kan hämta sidan direkt, använd din kunskap om receptet om URL:en är välkänd. Returnera BARA JSON, inget annat."}]
+          max_tokens:2000,
+          tools:[{type:"web_search_20250305",name:"web_search"}],
+          system:"Du är en assistent som extraherar receptinformation. Sök efter receptet på angiven URL och extrahera all information. Svara till slut ENDAST med ett JSON-objekt utan markdown eller backticks med dessa fält: title (string), description (string 1-2 meningar), time (string ex 30 min), servings (number), ingredients (array av {name, qty} objekt), steps (array av strings med tillagningssteg). Gissa rimliga värden om något saknas.",
+          messages:[{role:"user",content:"Hämta receptet från denna URL och extrahera all information: "+url}]
         })
       });
       const data=await res.json();
-      const text=data.content?.[0]?.text||"";
-      const clean=text.replace(/```json|```/g,"").trim();
-      const recipe=JSON.parse(clean);
-      // Spara direkt i receptboken
+      // Hämta text från alla content-block (kan vara mix av text och tool_use)
+      const text=(data.content||[]).map(b=>b.type==="text"?b.text:"").filter(Boolean).join(" ");
+      if(!text)throw new Error("Tomt svar från API");
+      // Extrahera JSON från svaret
+      const jsonMatch=text.match(/\{[\s\S]*\}/);
+      if(!jsonMatch)throw new Error("Inget JSON i svaret");
+      const recipe=JSON.parse(jsonMatch[0]);
       const newRecipe={
         id:Date.now(),
         title:recipe.title||"Importerat recept",
         description:recipe.description||"",
         time:recipe.time||"",
         servings:recipe.servings||4,
-        ingredients:(recipe.ingredients||[]).map((ing,i)=>({id:i+1,name:ing.name||ing,qty:ing.qty||""})),
+        ingredients:(recipe.ingredients||[]).map((ing,i)=>({
+          id:i+1,
+          name:typeof ing==="string"?ing:(ing.name||""),
+          qty:typeof ing==="string"?"":( ing.qty||"")
+        })),
         steps:recipe.steps||[],
         ambition:"",
         rating:0,
@@ -876,12 +885,11 @@ function Grocery(){
       setRecipes(prev=>[newRecipe,...prev]);
       setShowImport(false);
       setImportUrl("");
-      // Öppna receptet för granskning
       setEditRecipe(newRecipe.id);
       setShowRecipeForm(true);
     }catch(e){
-      setImportError("Kunde inte hämta receptet. Kontrollera URL:en och försök igen.");
-      console.error(e);
+      console.error("Import error:",e);
+      setImportError("Kunde inte hämta receptet. Försök med en annan länk eller klistra in recepttexten manuellt.");
     }
     setImportLoading(false);
   };
