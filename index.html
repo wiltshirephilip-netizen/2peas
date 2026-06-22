@@ -1008,7 +1008,10 @@ function Grocery(){
         <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Recept</button>
       </div>
       <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setShowRecipeForm(true);}} extra={
-        <button onClick={()=>{setFilterEditForm({ambition:[...ambitionOpts],time:[...timeOpts]});setShowFilterEdit(true);}} style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="adjustments" s={17}/></button>
+        <React.Fragment>
+          <button onClick={()=>setShowImport(true)} style={{background:"#b8815a",border:"none",borderRadius:10,padding:"6px 10px",cursor:"pointer",color:"#fff",fontSize:12,fontFamily:"inherit",fontWeight:500,display:"flex",alignItems:"center",gap:5}}><Ic n="link" s={14} color="#fff"/> Importera</button>
+          <button onClick={()=>{setFilterEditForm({ambition:[...ambitionOpts],time:[...timeOpts]});setShowFilterEdit(true);}} style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="adjustments" s={17}/></button>
+        </React.Fragment>
       }/>
       <div style={{padding:"0 14px 10px",display:"flex",gap:8,alignItems:"center"}}>
         <div style={{flex:1,display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:12,padding:"8px 12px"}}>
