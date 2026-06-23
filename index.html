@@ -45,9 +45,19 @@ const KEYS={
 // PIN och viewer sparas lokalt per enhet
 const LOCAL_ONLY=new Set([KEYS.pin,KEYS.pinSession,KEYS.viewer]);
 
+function genHID(){
+  const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Inga O,0,I,1 för att undvika förväxling
+  let code="";
+  for(let i=0;i<5;i++)code+=chars[Math.floor(Math.random()*chars.length)];
+  return code;
+}
 function getHouseholdId(){
   let h=localStorage.getItem("peas_hid");
-  if(!h){h="hh_"+Math.random().toString(36).slice(2,12);localStorage.setItem("peas_hid",h);}
+  // Migrera gamla hh_-koder till ny femsiffrig format
+  if(!h||h.startsWith("hh_")){
+    const newCode=h?null:genHID(); // Befintliga användare behåller sin gamla kod tills de byter
+    if(!h){localStorage.setItem("peas_hid",newCode);h=newCode;}
+  }
   return h;
 }
 const HID=getHouseholdId();
@@ -2842,14 +2852,16 @@ const ONBOARD_COLORS=[
 ];
 
 function Onboarding({onDone}){
-  const [mode,setMode]=useState(null); // null | 'create' | 'join'
+  // Kolla om ?join=KOD finns i URL
+  const urlJoinCode=(()=>{try{return new URLSearchParams(window.location.search).get("join")||"";}catch{return "";}})();
+  const [mode,setMode]=useState(urlJoinCode?"join":null);
   const [hhName,setHhName]=useState("");
   const [p1,setP1]=useState("");
   const [p2,setP2]=useState("");
   const [c1,setC1]=useState(ONBOARD_COLORS[0]);
   const [c2,setC2]=useState(ONBOARD_COLORS[1]);
   const [pin,setPin]=useState("");
-  const [joinCode,setJoinCode]=useState("");
+  const [joinCode,setJoinCode]=useState(urlJoinCode);
   const [err,setErr]=useState("");
   const [busy,setBusy]=useState(false);
   const [,setHousehold]=useLS(KEYS.household,null);
@@ -2860,16 +2872,21 @@ function Onboarding({onDone}){
     if(!p1.trim()||!p2.trim()){setErr("Fyll i båda namnen");return;}
     setBusy(true);
     try{
+      // Generera ny unik HID för detta hushåll
+      const newHID=genHID();
+      localStorage.setItem("peas_hid",newHID);
       const cfg={
         hhName:hhName.trim()||"Vårt hushåll",
         p1name:p1.trim(),p1color:c1.h,p1bg:c1.bg,
         p2name:p2.trim(),p2color:c2.h,p2bg:c2.bg,
+        code:newHID,
         created:Date.now(),
       };
       setHousehold(cfg);
       applyHouseholdCfg(cfg);
       if(pin.length===4){
         const hash=Array.from(pin).reduce((h,c)=>Math.imul(31,h)+c.charCodeAt(0)|0,0).toString(36);
+        cfg.pin=hash; // Spara PIN-hash i household-config så partner kan verifiera
         setStoredPin(hash);
         setSessionTs(Date.now());
       }
@@ -2878,11 +2895,31 @@ function Onboarding({onDone}){
     setBusy(false);
   };
 
-  const join=()=>{
-    const c=joinCode.trim();
-    if(!c.startsWith("hh_")||c.length<10){setErr("Ogiltig kod — ska börja med hh_");return;}
-    localStorage.setItem("peas_hid",c);
-    window.location.reload();
+  const join=async()=>{
+    const c=joinCode.trim().toUpperCase();
+    if(c.length!==5){setErr("Koden ska vara 5 tecken");return;}
+    setBusy(true);
+    try{
+      // Sätt HID till den angivna koden
+      localStorage.setItem("peas_hid",c);
+      // Hämta household-config för detta HID från Supabase
+      const cfgKey="peas_household_cfg__"+c;
+      const{data}=await window._supa.from("household_data").select("value").eq("id",cfgKey).maybeSingle();
+      if(!data){setErr("Hittade inget hushåll med den koden");localStorage.removeItem("peas_hid");setBusy(false);return;}
+      const cfg=data.value;
+      // Verifiera PIN om det finns
+      if(cfg.pin){
+        if(!pin){setErr("Detta hushåll kräver en PIN-kod");setBusy(false);return;}
+        const hash=Array.from(pin).reduce((h,c)=>Math.imul(31,h)+c.charCodeAt(0)|0,0).toString(36);
+        if(hash!==cfg.pin){setErr("Fel PIN-kod");setBusy(false);return;}
+      }
+      // Spara config lokalt
+      localStorage.setItem(KEYS.household,JSON.stringify(cfg));
+      // Sätt session om PIN godkändes
+      if(cfg.pin){localStorage.setItem(KEYS.pinSession,JSON.stringify(Date.now()));}
+      window.location.reload();
+    }catch(e){setErr("Något gick fel: "+e.message);}
+    setBusy(false);
   };
 
   const inp2={border:"0.5px solid #e2ddd6",borderRadius:14,padding:"12px 14px",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420",width:"100%"};
@@ -2904,11 +2941,18 @@ function Onboarding({onDone}){
   if(mode==="join") return(
     <div style={{position:"fixed",inset:0,background:"#f7f4ef",display:"flex",flexDirection:"column",padding:"60px 32px 32px"}}>
       <button onClick={()=>setMode(null)} style={{background:"none",border:"none",color:"#9b9186",fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",marginBottom:32}}>← Tillbaka</button>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:6}}>Gå med</div>
-      <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange hushållskoden från din partner.</div>
-      <input style={{...inp2,textAlign:"center",fontSize:13,letterSpacing:2,marginBottom:12}} placeholder="hh_xxxxxxxxxx" value={joinCode} onChange={e=>setJoinCode(e.target.value)}/>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:6}}>Gå med via kod</div>
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange koden och eventuell PIN från din partner.</div>
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>HUSHÅLLSKOD</div>
+      <input style={{...inp2,textAlign:"center",fontSize:22,letterSpacing:6,fontWeight:700,marginBottom:16}} placeholder="AB3XK"
+        value={joinCode} onChange={e=>setJoinCode(e.target.value.toUpperCase().slice(0,5))}
+        maxLength={5}/>
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PIN-KOD (om hushållet har en)</div>
+      <input style={{...inp2,textAlign:"center",letterSpacing:6,marginBottom:16}} placeholder="Lämna tom om ingen PIN"
+        type="password" inputMode="numeric" maxLength={4}
+        value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
       {err&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12}}>{err}</div>}
-      <button onClick={join} style={btn}>Para ihop</button>
+      <button onClick={join} style={btn}>Gå med</button>
     </div>
   );
 
@@ -3154,11 +3198,18 @@ function App(){
       {showHH&&(
         <div style={{margin:"0 14px 8px",background:"#fff",border:"0.5px solid #e2ddd6",borderRadius:16,padding:16,display:"flex",flexDirection:"column",gap:10}}>
           <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4}}>DIN HUSHÅLLSKOD</div>
-          <div style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
-            <span style={{flex:1,fontSize:12,fontFamily:"monospace",color:"#2c2420",wordBreak:"break-all"}}>{HID}</span>
-            <button onClick={()=>navigator.clipboard.writeText(HID)} style={{background:"#b8815a",border:"none",borderRadius:8,padding:"4px 10px",color:"#fff",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Kopiera</button>
+          <div style={{display:"flex",alignItems:"center",gap:8,background:"#f7f4ef",borderRadius:10,padding:"12px 14px",marginBottom:4}}>
+            <span style={{flex:1,fontSize:26,fontFamily:"monospace",fontWeight:700,color:"#2c2420",letterSpacing:4}}>{HID}</span>
           </div>
-          <div style={{fontSize:11,color:"#9b9186"}}>Dela koden med din partner. De klistrar in den nedan för att synka all data.</div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>navigator.clipboard.writeText(HID)} style={{flex:1,background:"#ede8e1",border:"none",borderRadius:10,padding:"8px",color:"#2c2420",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>📋 Kopiera kod</button>
+            <button onClick={()=>{
+              const url=window.location.origin+window.location.pathname+"?join="+HID;
+              navigator.clipboard.writeText(url);
+              alert("Länk kopierad! Skicka den till din partner.");
+            }} style={{flex:1,background:"#b8815a",border:"none",borderRadius:10,padding:"8px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>🔗 Dela länk</button>
+          </div>
+          <div style={{fontSize:11,color:"#9b9186"}}>Din partner anger koden eller öppnar länken för att gå med.</div>
           <button onClick={()=>{
             setEditHHForm({
               hhName:household?.hhName||"",
