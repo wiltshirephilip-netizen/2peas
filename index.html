@@ -2896,8 +2896,9 @@ function Onboarding({onDone}){
   };
 
   const join=async()=>{
-    const c=joinCode.trim().toUpperCase();
-    if(c.length!==5){setErr("Koden ska vara 5 tecken");return;}
+    const raw=joinCode.trim();
+    const c=raw.startsWith("hh_")?raw:raw.toUpperCase();
+    if(c.length<4){setErr("Ange en giltig kod");return;}
     setBusy(true);
     try{
       // Sätt HID till den angivna koden
@@ -2945,8 +2946,8 @@ function Onboarding({onDone}){
       <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange koden och eventuell PIN från din partner.</div>
       <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>HUSHÅLLSKOD</div>
       <input style={{...inp2,textAlign:"center",fontSize:22,letterSpacing:6,fontWeight:700,marginBottom:16}} placeholder="AB3XK"
-        value={joinCode} onChange={e=>setJoinCode(e.target.value.toUpperCase().slice(0,5))}
-        maxLength={5}/>
+        value={joinCode} onChange={e=>setJoinCode(e.target.value)}
+        maxLength={20}/>
       <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PIN-KOD (om hushållet har en)</div>
       <input style={{...inp2,textAlign:"center",letterSpacing:6,marginBottom:16}} placeholder="Lämna tom om ingen PIN"
         type="password" inputMode="numeric" maxLength={4}
@@ -3209,6 +3210,17 @@ function App(){
               alert("Länk kopierad! Skicka den till din partner.");
             }} style={{flex:1,background:"#b8815a",border:"none",borderRadius:10,padding:"8px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>🔗 Dela länk</button>
           </div>
+          {HID.startsWith("hh_")&&(
+            <button onClick={()=>{
+              if(!window.confirm("Generera en ny kortare kod? Din gamla kod slutar fungera."))return;
+              const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+              let code="";for(let i=0;i<5;i++)code+=chars[Math.floor(Math.random()*chars.length)];
+              localStorage.setItem("peas_hid",code);
+              window.location.reload();
+            }} style={{background:"#eef0f8",border:"none",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#4a5a8c",fontWeight:500,width:"100%"}}>
+              ✨ Uppgradera till ny 5-teckens kod
+            </button>
+          )}
           <div style={{fontSize:11,color:"#9b9186"}}>Din partner anger koden eller öppnar länken för att gå med.</div>
           <button onClick={()=>{
             setEditHHForm({
