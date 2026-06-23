@@ -889,7 +889,8 @@ function Grocery(){
       setShowRecipeForm(true);
     }catch(e){
       console.error("Import error:",e);
-      setImportError("Kunde inte hämta receptet. Försök med en annan länk eller klistra in recepttexten manuellt.");
+      const msg=e?.message||String(e);
+      setImportError("Fel: "+msg);
     }
     setImportLoading(false);
   };
