@@ -1132,6 +1132,7 @@ function Grocery(){
       {showRecipeForm&&(
         <Modal title={editRecipe?"Redigera recept":"Nytt recept"} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}>
           <RecipeForm
+            key={editRecipe||"new"}
             ambitionOpts={ambitionOpts} timeOpts={timeOpts}
             initial={editRecipe?(()=>{const r=recipes.find(r=>r.id===editRecipe);return r?{...r,url:r.url||"",ingredientsText:(r.ingredients||[]).map(i=>i.qty?`${i.name}, ${i.qty}`:i.name).join("\n")}:null;})():null}
             onSave={saveRecipe} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}
