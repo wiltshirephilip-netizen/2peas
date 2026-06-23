@@ -839,47 +839,52 @@ function Grocery(){
   const [importLoading,setImportLoading]=useState(false);
   const [importError,setImportError]=useState("");
 
+  const SPOON_KEY="eea8b1c1174d4b8d895da3c423b692e9";
+
   const importRecipe=async()=>{
     const url=importUrl.trim();
     if(!url)return;
     setImportLoading(true);
     setImportError("");
     try{
-      // Använd web_search-verktyget för att hämta receptsidan
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-6",
-          max_tokens:2000,
-          tools:[{type:"web_search_20250305",name:"web_search"}],
-          system:"Du är en assistent som extraherar receptinformation. Sök efter receptet på angiven URL och extrahera all information. Svara till slut ENDAST med ett JSON-objekt utan markdown eller backticks med dessa fält: title (string), description (string 1-2 meningar), time (string ex 30 min), servings (number), ingredients (array av {name, qty} objekt), steps (array av strings med tillagningssteg). Gissa rimliga värden om något saknas.",
-          messages:[{role:"user",content:"Hämta receptet från denna URL och extrahera all information: "+url}]
-        })
-      });
-      const data=await res.json();
-      // Hämta text från alla content-block (kan vara mix av text och tool_use)
-      const text=(data.content||[]).map(b=>b.type==="text"?b.text:"").filter(Boolean).join(" ");
-      if(!text)throw new Error("Tomt svar från API");
-      // Extrahera JSON från svaret
-      const jsonMatch=text.match(/\{[\s\S]*\}/);
-      if(!jsonMatch)throw new Error("Inget JSON i svaret");
-      const recipe=JSON.parse(jsonMatch[0]);
+      // Steg 1: Hämta recept-ID från URL via Spoonacular
+      const extractRes=await fetch(
+        "https://api.spoonacular.com/recipes/extract?url="+encodeURIComponent(url)+"&apiKey="+SPOON_KEY
+      );
+      if(!extractRes.ok){
+        const err=await extractRes.json().catch(()=>({}));
+        throw new Error(err.message||"Spoonacular svarade med "+extractRes.status);
+      }
+      const data=await extractRes.json();
+
+      // Bygg recept från Spoonacular-svaret
+      const mins=data.readyInMinutes?data.readyInMinutes+" min":"";
+      const ingredients=(data.extendedIngredients||[]).map((ing,i)=>({
+        id:i+1,
+        name:ing.nameClean||ing.name||"",
+        qty:ing.original||ing.amount+" "+ing.unit||""
+      }));
+
+      // Rensa HTML från instruktioner
+      const stripHtml=h=>(h||"").replace(/<[^>]+>/g,"").trim();
+      const steps=[];
+      if(data.analyzedInstructions&&data.analyzedInstructions.length>0){
+        data.analyzedInstructions[0].steps.forEach(s=>steps.push(stripHtml(s.step)));
+      } else if(data.instructions){
+        stripHtml(data.instructions).split("\n").filter(s=>s.trim()).forEach(s=>steps.push(s));
+      }
+
       const newRecipe={
         id:Date.now(),
-        title:recipe.title||"Importerat recept",
-        description:recipe.description||"",
-        time:recipe.time||"",
-        servings:recipe.servings||4,
-        ingredients:(recipe.ingredients||[]).map((ing,i)=>({
-          id:i+1,
-          name:typeof ing==="string"?ing:(ing.name||""),
-          qty:typeof ing==="string"?"":( ing.qty||"")
-        })),
-        steps:recipe.steps||[],
+        title:data.title||"Importerat recept",
+        description:stripHtml(data.summary).slice(0,200)||"",
+        time:mins,
+        servings:data.servings||4,
+        ingredients,
+        steps,
         ambition:"",
         rating:0,
-        tags:[],
+        tags:(data.dishTypes||[]).slice(0,3),
         sourceUrl:url,
       };
       setRecipes(prev=>[newRecipe,...prev]);
@@ -889,8 +894,7 @@ function Grocery(){
       setShowRecipeForm(true);
     }catch(e){
       console.error("Import error:",e);
-      const msg=e?.message||String(e);
-      setImportError("Fel: "+msg);
+      setImportError("Kunde inte hämta receptet: "+(e?.message||String(e)));
     }
     setImportLoading(false);
   };
