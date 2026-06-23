@@ -859,11 +859,13 @@ function Grocery(){
 
       // Bygg recept från Spoonacular-svaret
       const mins=data.readyInMinutes?data.readyInMinutes+" min":"";
-      const ingredients=(data.extendedIngredients||[]).map((ing,i)=>({
-        id:i+1,
-        name:ing.nameClean||ing.name||"",
-        qty:ing.original||ing.amount+" "+ing.unit||""
-      }));
+      const ingredients=(data.extendedIngredients||[]).map((ing,i)=>{
+        // Bygg qty från amount+unit, name från nameClean
+        const amt=ing.amount?(ing.amount%1===0?ing.amount:parseFloat(ing.amount.toFixed(2))):"";
+        const unit=ing.unit||"";
+        const qty=amt?(amt+(unit?" "+unit:"")):"";
+        return{id:i+1,name:ing.nameClean||ing.name||"",qty};
+      });
 
       // Rensa HTML från instruktioner
       const stripHtml=h=>(h||"").replace(/<[^>]+>/g,"").trim();
