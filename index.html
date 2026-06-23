@@ -38,7 +38,7 @@ const KEYS={
   viewer:"peas_viewer",expiry:"peas_expiry",recipes:"peas_recipes",recipeAmbition:"peas_rec_amb",recipeTime:"peas_rec_time",
   activities:"peas_activities",knowledge:"peas_knowledge",budget:"peas_budget",
   budgetTemplates:"peas_budget_tpl",budgetSettled:"peas_budget_settled",
-  pin:"peas_pin",pinSession:"peas_pin_session",pickupEnabled:"peas_pickup_enabled",
+  household:"peas_household_cfg",pin:"peas_pin",pinSession:"peas_pin_session",pickupEnabled:"peas_pickup_enabled",
   actPauses:"peas_act_pauses"
 };
 
@@ -139,9 +139,16 @@ function useLS(key,init){
 }
 function useViewer(){return useLS(KEYS.viewer,"a");}
 
-const PA={id:"a",label:"Philip",color:"#b8815a",bg:"#fbeee6"};
-const PB={id:"b",label:"Melinda",color:"#5a8c5a",bg:"#e8f0e8"};
-const PERSONS=[PA,PB];
+// Standardvärden — skrivs över av onboarding
+let PA={id:"a",label:"Person A",color:"#b8815a",bg:"#fbeee6"};
+let PB={id:"b",label:"Person B",color:"#5a8c5a",bg:"#e8f0e8"};
+let PERSONS=[PA,PB];
+function applyHouseholdCfg(cfg){
+  if(!cfg)return;
+  if(cfg.p1name){PA={id:"a",label:cfg.p1name,color:cfg.p1color||"#b8815a",bg:cfg.p1bg||"#fbeee6"};}
+  if(cfg.p2name){PB={id:"b",label:cfg.p2name,color:cfg.p2color||"#5a8c5a",bg:cfg.p2bg||"#e8f0e8"};}
+  PERSONS=[PA,PB];
+}
 
 const Av=({p,s=28})=>(
   <div style={{width:s,height:s,borderRadius:"50%",background:p.bg,color:p.color,
@@ -2825,6 +2832,124 @@ const TABS=[
 function simpleHash(s){let h=0;for(let i=0;i<s.length;i++){h=(Math.imul(31,h)+s.charCodeAt(i))|0;}return h.toString(36);}
 const SESSION_HOURS=10;
 
+const ONBOARD_COLORS=[
+  {h:"#b8815a",bg:"#fbeee6",name:"Terracotta"},
+  {h:"#5a8c5a",bg:"#e8f0e8",name:"Sage"},
+  {h:"#4a7ab8",bg:"#e6eef8",name:"Hav"},
+  {h:"#b85a7a",bg:"#f8e6ee",name:"Rosa"},
+  {h:"#b89a3a",bg:"#f8f4e6",name:"Senap"},
+  {h:"#7a5ab8",bg:"#ede6f8",name:"Lila"},
+];
+
+function Onboarding({onDone}){
+  const [mode,setMode]=useState(null); // null | 'create' | 'join'
+  const [hhName,setHhName]=useState("");
+  const [p1,setP1]=useState("");
+  const [p2,setP2]=useState("");
+  const [c1,setC1]=useState(ONBOARD_COLORS[0]);
+  const [c2,setC2]=useState(ONBOARD_COLORS[1]);
+  const [pin,setPin]=useState("");
+  const [joinCode,setJoinCode]=useState("");
+  const [err,setErr]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [,setHousehold]=useLS(KEYS.household,null);
+  const [,setStoredPin]=useLS(KEYS.pin,null);
+  const [,setSessionTs]=useLS(KEYS.pinSession,0);
+
+  const create=async()=>{
+    if(!p1.trim()||!p2.trim()){setErr("Fyll i båda namnen");return;}
+    setBusy(true);
+    try{
+      const cfg={
+        hhName:hhName.trim()||"Vårt hushåll",
+        p1name:p1.trim(),p1color:c1.h,p1bg:c1.bg,
+        p2name:p2.trim(),p2color:c2.h,p2bg:c2.bg,
+        created:Date.now(),
+      };
+      setHousehold(cfg);
+      applyHouseholdCfg(cfg);
+      if(pin.length===4){
+        const hash=Array.from(pin).reduce((h,c)=>Math.imul(31,h)+c.charCodeAt(0)|0,0).toString(36);
+        setStoredPin(hash);
+        setSessionTs(Date.now());
+      }
+      onDone();
+    }catch(e){setErr("Något gick fel");}
+    setBusy(false);
+  };
+
+  const join=()=>{
+    const c=joinCode.trim();
+    if(!c.startsWith("hh_")||c.length<10){setErr("Ogiltig kod — ska börja med hh_");return;}
+    localStorage.setItem("peas_hid",c);
+    window.location.reload();
+  };
+
+  const inp2={border:"0.5px solid #e2ddd6",borderRadius:14,padding:"12px 14px",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420",width:"100%"};
+  const btn={background:"#2c2420",border:"none",borderRadius:14,padding:"14px",color:"#fff",fontSize:14,fontFamily:"inherit",fontWeight:500,cursor:"pointer",width:"100%"};
+  const btnSec={...btn,background:"#fff",color:"#2c2420",border:"0.5px solid #e2ddd6"};
+
+  if(!mode) return(
+    <div style={{position:"fixed",inset:0,background:"#f7f4ef",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"0 32px"}}>
+      <div style={{width:64,height:64,borderRadius:20,background:"#fff",border:"0.5px solid #e2ddd6",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:20,fontSize:28}}>🫛</div>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color:"#2c2420",marginBottom:6}}>2peas</div>
+      <div style={{fontSize:14,color:"#9b9186",marginBottom:48,textAlign:"center",maxWidth:260}}>Hushållsapp för två. Allt ni delar, på ett ställe.</div>
+      <div style={{display:"flex",flexDirection:"column",gap:12,width:"100%",maxWidth:320}}>
+        <button onClick={()=>setMode("create")} style={btn}>Skapa nytt hushåll</button>
+        <button onClick={()=>setMode("join")} style={btnSec}>Gå med med kod</button>
+      </div>
+    </div>
+  );
+
+  if(mode==="join") return(
+    <div style={{position:"fixed",inset:0,background:"#f7f4ef",display:"flex",flexDirection:"column",padding:"60px 32px 32px"}}>
+      <button onClick={()=>setMode(null)} style={{background:"none",border:"none",color:"#9b9186",fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",marginBottom:32}}>← Tillbaka</button>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:6}}>Gå med</div>
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange hushållskoden från din partner.</div>
+      <input style={{...inp2,textAlign:"center",fontSize:13,letterSpacing:2,marginBottom:12}} placeholder="hh_xxxxxxxxxx" value={joinCode} onChange={e=>setJoinCode(e.target.value)}/>
+      {err&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12}}>{err}</div>}
+      <button onClick={join} style={btn}>Para ihop</button>
+    </div>
+  );
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"#f7f4ef",overflowY:"auto",padding:"60px 24px 48px"}}>
+      <button onClick={()=>setMode(null)} style={{background:"none",border:"none",color:"#9b9186",fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",marginBottom:24}}>← Tillbaka</button>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:4}}>Skapa hushåll</div>
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:28}}>Ni får en kod att dela med varandra.</div>
+
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>HUSHÅLLETS NAMN</div>
+      <input style={{...inp2,marginBottom:24}} placeholder="t.ex. Villa Vintergatan" value={hhName} onChange={e=>setHhName(e.target.value)}/>
+
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PERSON 1</div>
+      <input style={{...inp2,marginBottom:12}} placeholder="Namn" value={p1} onChange={e=>setP1(e.target.value)}/>
+      <div style={{display:"flex",gap:8,marginBottom:24}}>
+        {ONBOARD_COLORS.map(c=>(
+          <button key={c.h} onClick={()=>setC1(c)} style={{width:36,height:36,borderRadius:"50%",background:c.h,border:c1.h===c.h?"3px solid #2c2420":"3px solid transparent",cursor:"pointer",flexShrink:0}}/>
+        ))}
+      </div>
+
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PERSON 2</div>
+      <input style={{...inp2,marginBottom:12}} placeholder="Namn" value={p2} onChange={e=>setP2(e.target.value)}/>
+      <div style={{display:"flex",gap:8,marginBottom:24}}>
+        {ONBOARD_COLORS.map(c=>(
+          <button key={c.h} onClick={()=>setC2(c)} style={{width:36,height:36,borderRadius:"50%",background:c.h,border:c2.h===c.h?"3px solid #2c2420":"3px solid transparent",cursor:"pointer",flexShrink:0}}/>
+        ))}
+      </div>
+
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PIN-KOD (VALFRITT)</div>
+      <input style={{...inp2,letterSpacing:6,marginBottom:6}} placeholder="4 siffror" inputMode="numeric" maxLength={4}
+        value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
+      <div style={{fontSize:11,color:"#9b9186",marginBottom:24}}>Låser appen vid öppning.</div>
+
+      {err&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12}}>{err}</div>}
+      <button onClick={create} disabled={busy} style={{...btn,opacity:busy?0.5:1}}>
+        {busy?"Skapar…":"Skapa hushåll"}
+      </button>
+    </div>
+  );
+}
+
 function PinLock({onUnlock}){
   const [storedPin]=useLS(KEYS.pin,null);
   const [sessionTs]=useLS(KEYS.pinSession,0);
@@ -2926,6 +3051,9 @@ function PinLock({onUnlock}){
 
 function App(){
   const [unlocked,setUnlocked]=useState(false);
+  const [household]=useLS(KEYS.household,null);
+  // Applicera hushållskonfiguration om den finns
+  if(household)applyHouseholdCfg(household);
   const [tab,setTab]=useState("home");
   const [viewer,setViewer]=useViewer();
   const [todos]=useLS(KEYS.todo,[]);
@@ -2959,6 +3087,7 @@ function App(){
     window.location.reload();
   };
 
+  if(!household)return <Onboarding onDone={()=>window.location.reload()}/>;
   if(!unlocked)return <PinLock onUnlock={()=>setUnlocked(true)}/>;
 
   return(
