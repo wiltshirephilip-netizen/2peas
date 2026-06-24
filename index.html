@@ -2895,28 +2895,15 @@ function Onboarding({onDone}){
     setBusy(false);
   };
 
-  const join=async()=>{
+  const join=()=>{
     const raw=joinCode.trim();
     const c=raw.startsWith("hh_")?raw:raw.toUpperCase();
     if(c.length<4){setErr("Ange en giltig kod");return;}
-    setBusy(true);
-    try{
-      // Verifiera att hushållet finns i Supabase — kolla om NÅGON data finns för detta HID
-      const{data,error}=await window._supa.from("household_data")
-        .select("id").eq("household_id",c).limit(1).maybeSingle();
-      if(error)throw error;
-      if(!data){
-        setErr("Hittade inget hushåll med den koden. Kontrollera att koden stämmer.");
-        setBusy(false);
-        return;
-      }
-      // Hushållet finns — rensa lokal data och byt HID
-      const keysToKeep=["peas_hid","peas_pin","peas_pin_session","peas_viewer"];
-      Object.keys(localStorage).forEach(k=>{if(!keysToKeep.includes(k))localStorage.removeItem(k);});
-      localStorage.setItem("peas_hid",c);
-      window.location.reload();
-    }catch(e){setErr("Något gick fel: "+e.message);}
-    setBusy(false);
+    // Rensa lokal data och byt HID — appen hämtar allt från Supabase vid omstart
+    const keysToKeep=["peas_pin","peas_pin_session","peas_viewer"];
+    Object.keys(localStorage).forEach(k=>{if(!keysToKeep.includes(k))localStorage.removeItem(k);});
+    localStorage.setItem("peas_hid",c);
+    window.location.reload();
   };
 
   const inp2={border:"0.5px solid #e2ddd6",borderRadius:14,padding:"12px 14px",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420",width:"100%"};
