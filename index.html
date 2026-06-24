@@ -2901,23 +2901,19 @@ function Onboarding({onDone}){
     if(c.length<4){setErr("Ange en giltig kod");return;}
     setBusy(true);
     try{
-      // Sätt HID till den angivna koden
-      localStorage.setItem("peas_hid",c);
-      // Hämta household-config för detta HID från Supabase
-      const cfgKey="peas_household_cfg__"+c;
-      const{data}=await window._supa.from("household_data").select("value").eq("id",cfgKey).maybeSingle();
-      if(!data){setErr("Hittade inget hushåll med den koden");localStorage.removeItem("peas_hid");setBusy(false);return;}
-      const cfg=data.value;
-      // Verifiera PIN om det finns
-      if(cfg.pin){
-        if(!pin){setErr("Detta hushåll kräver en PIN-kod");setBusy(false);return;}
-        const hash=Array.from(pin).reduce((h,c)=>Math.imul(31,h)+c.charCodeAt(0)|0,0).toString(36);
-        if(hash!==cfg.pin){setErr("Fel PIN-kod");setBusy(false);return;}
+      // Verifiera att hushållet finns i Supabase — kolla om NÅGON data finns för detta HID
+      const{data,error}=await window._supa.from("household_data")
+        .select("id").eq("household_id",c).limit(1).maybeSingle();
+      if(error)throw error;
+      if(!data){
+        setErr("Hittade inget hushåll med den koden. Kontrollera att koden stämmer.");
+        setBusy(false);
+        return;
       }
-      // Spara config lokalt
-      localStorage.setItem(KEYS.household,JSON.stringify(cfg));
-      // Sätt session om PIN godkändes
-      if(cfg.pin){localStorage.setItem(KEYS.pinSession,JSON.stringify(Date.now()));}
+      // Hushållet finns — rensa lokal data och byt HID
+      const keysToKeep=["peas_hid","peas_pin","peas_pin_session","peas_viewer"];
+      Object.keys(localStorage).forEach(k=>{if(!keysToKeep.includes(k))localStorage.removeItem(k);});
+      localStorage.setItem("peas_hid",c);
       window.location.reload();
     }catch(e){setErr("Något gick fel: "+e.message);}
     setBusy(false);
@@ -2934,7 +2930,7 @@ function Onboarding({onDone}){
       <div style={{fontSize:14,color:"#9b9186",marginBottom:48,textAlign:"center",maxWidth:260}}>Hushållsapp för två. Allt ni delar, på ett ställe.</div>
       <div style={{display:"flex",flexDirection:"column",gap:12,width:"100%",maxWidth:320}}>
         <button onClick={()=>setMode("create")} style={btn}>Skapa nytt hushåll</button>
-        <button onClick={()=>setMode("join")} style={btnSec}>Gå med med kod</button>
+        <button onClick={()=>setMode("join")} style={btnSec}>Logga in med kod</button>
       </div>
     </div>
   );
@@ -2942,7 +2938,7 @@ function Onboarding({onDone}){
   if(mode==="join") return(
     <div style={{position:"fixed",inset:0,background:"#f7f4ef",display:"flex",flexDirection:"column",padding:"60px 32px 32px"}}>
       <button onClick={()=>setMode(null)} style={{background:"none",border:"none",color:"#9b9186",fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",marginBottom:32}}>← Tillbaka</button>
-      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:6}}>Gå med via kod</div>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:6}}>Logga in med kod</div>
       <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange koden och eventuell PIN från din partner.</div>
       <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>HUSHÅLLSKOD</div>
       <input style={{...inp2,textAlign:"center",fontSize:22,letterSpacing:6,fontWeight:700,marginBottom:16}} placeholder="AB3XK"
@@ -2953,7 +2949,7 @@ function Onboarding({onDone}){
         type="password" inputMode="numeric" maxLength={4}
         value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
       {err&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12}}>{err}</div>}
-      <button onClick={join} style={btn}>Gå med</button>
+      <button onClick={join} style={btn}>Logga in</button>
     </div>
   );
 
