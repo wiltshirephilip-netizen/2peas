@@ -1587,7 +1587,7 @@ function Calendar(){
     const payload={
       ...f,title:f.title.trim(),
       time,endTime,
-      endDate:(!f.allDay&&f.endDate&&f.endDate>f.date)?f.endDate:null,
+      endDate:(f.endDate&&f.endDate>f.date)?f.endDate:null,
       allDay:f.allDay,
       recurrence:f.recurrence||"none",
       note:f.note||""
@@ -2965,7 +2965,7 @@ function Onboarding({onDone}){
     <div style={{position:"fixed",inset:0,background:"#f7f4ef",display:"flex",flexDirection:"column",padding:"60px 32px 32px"}}>
       <button onClick={()=>setMode(null)} style={{background:"none",border:"none",color:"#9b9186",fontSize:13,cursor:"pointer",fontFamily:"inherit",textAlign:"left",marginBottom:32}}>← Tillbaka</button>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"#2c2420",marginBottom:6}}>Logga in med kod</div>
-      <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange koden och eventuell PIN från din partner.</div>
+      <div style={{fontSize:13,color:"#9b9186",marginBottom:24}}>Ange hushållskod. Inloggad användare kan se hushållskod genom att trycka på hus-symbolen högst upp i appen.</div>
       <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>HUSHÅLLSKOD</div>
       <input style={{...inp2,textAlign:"center",fontSize:22,letterSpacing:6,fontWeight:700,marginBottom:16}} placeholder="AB3XK"
         value={joinCode} onChange={e=>setJoinCode(e.target.value)}
@@ -3001,10 +3001,10 @@ function Onboarding({onDone}){
         ))}
       </div>
 
-      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PIN-KOD (VALFRITT)</div>
+      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PIN-KOD</div>
       <input style={{...inp2,letterSpacing:6,marginBottom:6}} placeholder="4 siffror" inputMode="numeric" maxLength={4}
         value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
-      <div style={{fontSize:11,color:"#9b9186",marginBottom:24}}>Låser appen vid öppning.</div>
+      <div style={{fontSize:11,color:"#9b9186",marginBottom:24}}>PIN-kod krävs för att öppna appen och för att bjuda in din partner.</div>
 
       {err&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12}}>{err}</div>}
       <button onClick={create} disabled={busy} style={{...btn,opacity:busy?0.5:1}}>
@@ -3106,14 +3106,7 @@ function PinLock({onUnlock}){
         ))}
       </div>
 
-      {mode==="enter"&&storedPin&&(
-        <button onClick={()=>{if(confirm(/*window.confirm*/"Är du säker? PIN-koden återställs och en ny måste sättas.")){}
-          // just reset
-          setStoredPin(null);setPin("");setMode("setup");
-        }} style={{marginTop:32,fontSize:12,color:"#9b9186",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>
-          Glömt PIN? Återställ
-        </button>
-      )}
+      
     </div>
   );
 }
@@ -3332,11 +3325,18 @@ function App(){
               🔒 Byt PIN
             </button>
           </div>
+          <button onClick={()=>{
+              if(!window.confirm("Logga ut? Du behöver hushållskoden för att logga in igen."))return;
+              Object.keys(localStorage).forEach(k=>localStorage.removeItem(k));
+              window.location.reload();
+            }} style={{background:"#fdf0ee",border:"0.5px solid #f5c6c0",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#c0392b",width:"100%",textAlign:"left"}}>
+            🚪 Logga ut
+          </button>
           <div style={{borderTop:"0.5px solid #f2ede6",paddingTop:10}}>
             <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>GÅ MED I ANNAT HUSHÅLL</div>
             <div style={{display:"flex",gap:6}}>
               <input style={{flex:1,border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 10px",fontSize:12,fontFamily:"monospace",outline:"none",background:"#f7f4ef",color:"#2c2420"}}
-                placeholder="hh_xxxxxxxxxx" value={joinCode} onChange={e=>setJoinCode(e.target.value)}/>
+                placeholder="t.ex. AB3XK" value={joinCode} onChange={e=>setJoinCode(e.target.value)}/>
               <button onClick={doJoin} style={{background:"#5a8c5a",border:"none",borderRadius:10,padding:"8px 12px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>Anslut</button>
             </div>
           </div>
