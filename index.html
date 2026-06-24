@@ -2932,6 +2932,10 @@ function Onboarding({onDone}){
       // Spara config lokalt om vi hittade den — så onboarding inte visas
       if(cfgData){
         localStorage.setItem(KEYS.household,JSON.stringify(cfgData.value));
+        // Om hushållet har PIN, spara hash lokalt så PinLock vet att verifiera
+        if(cfgData.value&&cfgData.value.pin){
+          localStorage.setItem(KEYS.pin,JSON.stringify(cfgData.value.pin));
+        }
       }
 
       window.location.reload();
@@ -3011,18 +3015,23 @@ function Onboarding({onDone}){
 }
 
 function PinLock({onUnlock}){
-  const [storedPin]=useLS(KEYS.pin,null);
+  const [storedPin,setStoredPin]=useLS(KEYS.pin,null);
   const [sessionTs]=useLS(KEYS.pinSession,0);
+  // Hämta PIN-hash från household-config (sparas i Supabase)
+  const hhCfgRaw=localStorage.getItem(KEYS.household);
+  const hhCfg=hhCfgRaw?JSON.parse(hhCfgRaw):null;
+  const hhPin=hhCfg?.pin||null;
+  // Synka PIN från household-config till lokal storedPin om den saknas
+  React.useEffect(()=>{if(hhPin&&!storedPin)setStoredPin(hhPin);},[]);
+  const effectivePin=storedPin||hhPin||null;
   const [mode,setMode]=useState(()=>{
-    // Already unlocked recently?
-    if(storedPin&&sessionTs&&(Date.now()-sessionTs)<SESSION_HOURS*3600000)return"unlocked";
-    if(!storedPin)return"setup";
+    if(effectivePin&&sessionTs&&(Date.now()-sessionTs)<SESSION_HOURS*3600000)return"unlocked";
+    if(!effectivePin)return"setup";
     return"enter";
   });
   const [pin,setPin]=useState("");
   const [confirm,setConfirm]=useState("");
   const [err,setErr]=useState("");
-  const [,setStoredPin]=useLS(KEYS.pin,null);
   const [,setSessionTs]=useLS(KEYS.pinSession,0);
 
   useEffect(()=>{if(mode==="unlocked")onUnlock();},[mode]);
@@ -3057,7 +3066,7 @@ function PinLock({onUnlock}){
 
   useEffect(()=>{
     if(mode==="enter"&&pin.length===4){
-      if(simpleHash(pin)===storedPin){setSessionTs(Date.now());setMode("unlocked");}
+      if(simpleHash(pin)===effectivePin){setSessionTs(Date.now());setMode("unlocked");}
       else{setErr("Fel kod");setPin("");}
     }
   },[pin,mode,storedPin]);
@@ -3139,6 +3148,33 @@ function App(){
   },[]);
   const [showHH,setShowHH]=useState(false);
   const [showEditHH,setShowEditHH]=useState(false);
+  const [showChangePIN,setShowChangePIN]=useState(false);
+  const [newPIN,setNewPIN]=useState("");
+  const [newPINConfirm,setNewPINConfirm]=useState("");
+  const [pinErr,setPinErr]=useState("");
+  const [,setStoredPin_app]=useLS(KEYS.pin,null);
+  const [,setSessionTs_app]=useLS(KEYS.pinSession,0);
+
+  const doChangePIN=()=>{
+    if(newPIN.length!==4){setPinErr("PIN måste vara 4 siffror");return;}
+    if(newPIN!==newPINConfirm){setPinErr("Koderna matchar inte");return;}
+    const hash=simpleHash(newPIN);
+    // Spara lokalt
+    setStoredPin_app(hash);
+    setSessionTs_app(Date.now());
+    // Uppdatera household-config med ny PIN
+    const hid=localStorage.getItem("peas_hid");
+    const cfg={...(household||{}),pin:hash};
+    setHouseholdCfg(cfg);
+    // Synka till Supabase
+    window._supa.from("household_data").upsert(
+      {id:KEYS.household+"__"+hid,household_id:hid,value:cfg,updated_at:new Date().toISOString()},
+      {onConflict:"id"}
+    ).then(()=>console.log("PIN uppdaterad i Supabase")).catch(console.warn);
+    setShowChangePIN(false);
+    setNewPIN("");setNewPINConfirm("");setPinErr("");
+    alert("PIN uppdaterad!");
+  };
   const [editHHForm,setEditHHForm]=useState(null);
   const [,setHouseholdCfg]=useLS(KEYS.household,null);
   const joinCode_ref=React.useRef("");
@@ -3168,6 +3204,45 @@ function App(){
           </div>
         </div>
       </div>
+      {showChangePIN&&(
+        <Modal title="Byt PIN" onClose={()=>{setShowChangePIN(false);setNewPIN("");setNewPINConfirm("");setPinErr("");}}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:13,color:"#6b6357"}}>Ny PIN gäller för alla som använder hushållet.</div>
+            <div>
+              <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:6}}>NY PIN (4 SIFFROR)</div>
+              <input style={{border:"0.5px solid #e2ddd6",borderRadius:12,padding:"10px 14px",fontSize:18,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420",width:"100%",letterSpacing:6,textAlign:"center"}}
+                type="password" inputMode="numeric" maxLength={4} placeholder="••••"
+                value={newPIN} onChange={e=>setNewPIN(e.target.value.replace(/\D/g,"").slice(0,4))}/>
+            </div>
+            <div>
+              <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:6}}>BEKRÄFTA PIN</div>
+              <input style={{border:"0.5px solid #e2ddd6",borderRadius:12,padding:"10px 14px",fontSize:18,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420",width:"100%",letterSpacing:6,textAlign:"center"}}
+                type="password" inputMode="numeric" maxLength={4} placeholder="••••"
+                value={newPINConfirm} onChange={e=>setNewPINConfirm(e.target.value.replace(/\D/g,"").slice(0,4))}/>
+            </div>
+            {pinErr&&<div style={{fontSize:12,color:"#c0392b"}}>{pinErr}</div>}
+            <button onClick={doChangePIN} style={{background:"#2c2420",border:"none",borderRadius:12,padding:"12px",color:"#fff",fontSize:14,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}}>
+              Spara ny PIN
+            </button>
+            {household?.pin&&(
+              <button onClick={()=>{
+                if(!confirm("Ta bort PIN-skyddet?"))return;
+                const hid=localStorage.getItem("peas_hid");
+                const cfg={...(household||{})};delete cfg.pin;
+                setHouseholdCfg(cfg);setStoredPin_app(null);
+                window._supa.from("household_data").upsert(
+                  {id:KEYS.household+"__"+hid,household_id:hid,value:cfg,updated_at:new Date().toISOString()},
+                  {onConflict:"id"}
+                ).catch(console.warn);
+                setShowChangePIN(false);alert("PIN borttagen.");
+              }} style={{background:"none",border:"none",fontSize:12,color:"#c0392b",cursor:"pointer",fontFamily:"inherit"}}>
+                Ta bort PIN-skydd
+              </button>
+            )}
+          </div>
+        </Modal>
+      )}
+
       {showEditHH&&editHHForm&&(
         <Modal title="Redigera hushåll" onClose={()=>setShowEditHH(false)}>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -3242,16 +3317,21 @@ function App(){
             </button>
           )}
           <div style={{fontSize:11,color:"#9b9186"}}>Din partner anger koden eller öppnar länken för att gå med.</div>
-          <button onClick={()=>{
-            setEditHHForm({
-              hhName:household?.hhName||"",
-              p1name:household?.p1name||PA.label,p1color:household?.p1color||PA.color,p1bg:household?.p1bg||PA.bg,
-              p2name:household?.p2name||PB.label,p2color:household?.p2color||PB.color,p2bg:household?.p2bg||PB.bg,
-            });
-            setShowEditHH(true);setShowHH(false);
-          }} style={{background:"#f7f4ef",border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#2c2420",textAlign:"left"}}>
-            ✏️ Redigera hushåll (namn &amp; personer)
-          </button>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>{
+              setEditHHForm({
+                hhName:household?.hhName||"",
+                p1name:household?.p1name||PA.label,p1color:household?.p1color||PA.color,p1bg:household?.p1bg||PA.bg,
+                p2name:household?.p2name||PB.label,p2color:household?.p2color||PB.color,p2bg:household?.p2bg||PB.bg,
+              });
+              setShowEditHH(true);setShowHH(false);
+            }} style={{flex:1,background:"#f7f4ef",border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#2c2420",textAlign:"left"}}>
+              ✏️ Redigera hushåll
+            </button>
+            <button onClick={()=>{setShowChangePIN(true);setShowHH(false);}} style={{flex:1,background:"#f7f4ef",border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#2c2420",textAlign:"left"}}>
+              🔒 Byt PIN
+            </button>
+          </div>
           <div style={{borderTop:"0.5px solid #f2ede6",paddingTop:10}}>
             <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>GÅ MED I ANNAT HUSHÅLL</div>
             <div style={{display:"flex",gap:6}}>
