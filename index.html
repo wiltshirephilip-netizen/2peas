@@ -33,7 +33,7 @@ select{font-family:inherit;}
 const { useState, useEffect, useRef } = React;
 
 const KEYS={
-  grocery:"peas_grocery",groceryCats:"peas_gcats",groceryTemplates:"peas_gtpl",noticeboard:"peas_board",todo:"peas_todo",events:"peas_events",
+  grocery:"peas_grocery",groceryCats:"peas_gcats",groceryTemplates:"peas_gtpl",noticeboard:"peas_board",pantry:"peas_pantry",todo:"peas_todo",events:"peas_events",
   expenses:"peas_expenses",settled:"peas_settled",pickup:"peas_pickup",
   viewer:"peas_viewer",expiry:"peas_expiry",recipes:"peas_recipes",recipeAmbition:"peas_rec_amb",recipeTime:"peas_rec_time",
   activities:"peas_activities",knowledge:"peas_knowledge",budget:"peas_budget",
@@ -940,10 +940,28 @@ function Grocery(){
     setF(p=>({...p,name:"",qty:""}));
     setTimeout(()=>nameRef.current&&nameRef.current.focus(),10);
   };
+  const [pantry,setPantry]=useLS(KEYS.pantry,[
+    "salt","peppar","olivolja","rapsolja","smör","socker","mjöl","vatten",
+    "vitlök","lök","ägg","mjölk","grädde","buljong","soja","vinäger",
+    "olja","örter","kryddor","matolja","solrosolja"
+  ]);
+  const [showPantryMgr,setShowPantryMgr]=useState(false);
+  const [newPantryItem,setNewPantryItem]=useState("");
+  // Exponera setShowPantryMgr globalt så hus-menyn kan öppna den
+  React.useEffect(()=>{window._openPantry=()=>setShowPantryMgr(true);},[]);
+
+  const isPantryItem=(name)=>{
+    const n=name.toLowerCase();
+    return pantry.some(p=>n.includes(p.toLowerCase()));
+  };
+
   const addFromRecipe=r=>{
     const now=Date.now();
-    setItems(p=>[...p,...r.ingredients.map((ing,i)=>({id:now+i,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false,recipeId:r.id,recipeName:r.title}))]);
+    const filtered=r.ingredients.filter(ing=>!isPantryItem(ing.name));
+    const skipped=r.ingredients.length-filtered.length;
+    setItems(p=>[...p,...filtered.map((ing,i)=>({id:now+i,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false,recipeId:r.id,recipeName:r.title}))]);
     setSub("list");
+    if(skipped>0)setTimeout(()=>alert(skipped+" skafferivaror filtrerades bort. Ändra ditt skafferi under hus-ikonen."),100);
   };
   const saveRecipe=data=>{
     if(editRecipe)setRecipes(prev=>prev.map(r=>r.id===editRecipe?{...r,...data}:r));
@@ -1210,6 +1228,31 @@ function Grocery(){
         </div>
       ))}
 
+      {showPantryMgr&&(
+        <Modal title="Vårt skafferi" onClose={()=>setShowPantryMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:13,color:"#6b6357",lineHeight:1.5}}>Varor här filtreras bort automatiskt när du importerar recept. "olivolja" matchar även "extra virgin olivolja".</div>
+            <div style={{display:"flex",gap:8}}>
+              <input style={{flex:1,border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:13,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420"}}
+                placeholder="Lägg till vara..." value={newPantryItem}
+                onChange={e=>setNewPantryItem(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"&&newPantryItem.trim()){setPantry(p=>[...p,newPantryItem.trim().toLowerCase()]);setNewPantryItem("");}}}/>
+              <button onClick={()=>{if(!newPantryItem.trim())return;setPantry(p=>[...p,newPantryItem.trim().toLowerCase()]);setNewPantryItem("");}}
+                style={{background:"#2c2420",border:"none",borderRadius:10,padding:"8px 14px",color:"#fff",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>+</button>
+            </div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:280,overflowY:"auto"}}>
+              {pantry.map((item,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:4,background:"#f7f4ef",borderRadius:20,padding:"4px 10px 4px 12px",fontSize:12,color:"#2c2420"}}>
+                  <span>{item}</span>
+                  <button onClick={()=>setPantry(p=>p.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 0 0 4px",color:"#9b9186",fontSize:14,lineHeight:1}}>×</button>
+                </div>
+              ))}
+            </div>
+            <button onClick={()=>setPantry(["salt","peppar","olivolja","rapsolja","smör","socker","mjöl","vatten","vitlök","lök","ägg","mjölk","grädde","buljong","soja","vinäger","olja","örter","kryddor","matolja","solrosolja"])}
+              style={{background:"none",border:"none",fontSize:11,color:"#9b9186",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>Återställ standardlista</button>
+          </div>
+        </Modal>
+      )}
       {showClearAll&&<ConfirmModal title="Rensa hela listan?" message="Alla varor tas bort permanent. Det går inte att ångra." confirmLabel="Ja, rensa allt" danger onConfirm={()=>setItems([])} onClose={()=>setShowClearAll(false)}/>}
 
       {showTplMgr&&(
@@ -3310,6 +3353,11 @@ function App(){
             </button>
           )}
           <div style={{fontSize:11,color:"#9b9186"}}>Din partner anger koden eller öppnar länken för att gå med.</div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>{setShowHH(false);setTimeout(()=>window._openPantry&&window._openPantry(),100);}} style={{flex:1,background:"#f7f4ef",border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#2c2420",textAlign:"left"}}>
+              🥫 Skafferi
+            </button>
+          </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>{
               setEditHHForm({
