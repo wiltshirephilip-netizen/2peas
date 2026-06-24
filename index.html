@@ -2884,6 +2884,14 @@ function Onboarding({onDone}){
       };
       setHousehold(cfg);
       applyHouseholdCfg(cfg);
+      // Synka direkt till Supabase så andra enheter kan hitta hushållet
+      try{
+        const hid=localStorage.getItem("peas_hid")||newHID;
+        await window._supa.from("household_data").upsert(
+          {id:KEYS.household+"__"+hid,household_id:hid,value:cfg,updated_at:new Date().toISOString()},
+          {onConflict:"id"}
+        );
+      }catch(e){console.warn("Kunde inte synka config:",e);}
       if(pin.length===4){
         const hash=Array.from(pin).reduce((h,c)=>Math.imul(31,h)+c.charCodeAt(0)|0,0).toString(36);
         cfg.pin=hash; // Spara PIN-hash i household-config så partner kan verifiera
@@ -2895,15 +2903,42 @@ function Onboarding({onDone}){
     setBusy(false);
   };
 
-  const join=()=>{
+  const join=async()=>{
     const raw=joinCode.trim();
     const c=raw.startsWith("hh_")?raw:raw.toUpperCase();
     if(c.length<4){setErr("Ange en giltig kod");return;}
-    // Rensa lokal data och byt HID — appen hämtar allt från Supabase vid omstart
-    const keysToKeep=["peas_pin","peas_pin_session","peas_viewer"];
-    Object.keys(localStorage).forEach(k=>{if(!keysToKeep.includes(k))localStorage.removeItem(k);});
-    localStorage.setItem("peas_hid",c);
-    window.location.reload();
+    setBusy(true);
+    try{
+      // Hämta household-config direkt från Supabase för detta HID
+      const cfgKey="peas_household_cfg__"+c;
+      const{data:cfgData}=await window._supa.from("household_data")
+        .select("value").eq("id",cfgKey).maybeSingle();
+
+      if(!cfgData){
+        // Ingen config — kolla om det finns annan data för detta HID
+        const{data:anyData}=await window._supa.from("household_data")
+          .select("id").ilike("id","%__"+c).limit(1);
+        if(!anyData||anyData.length===0){
+          setErr("Hittade inget hushåll med den koden. Kontrollera stavningen.");
+          setBusy(false);
+          return;
+        }
+      }
+
+      // Rensa lokalt och sätt nytt HID
+      Object.keys(localStorage).forEach(k=>localStorage.removeItem(k));
+      localStorage.setItem("peas_hid",c);
+
+      // Spara config lokalt om vi hittade den — så onboarding inte visas
+      if(cfgData){
+        localStorage.setItem(KEYS.household,JSON.stringify(cfgData.value));
+      }
+
+      window.location.reload();
+    }catch(e){
+      setErr("Något gick fel: "+e.message);
+    }
+    setBusy(false);
   };
 
   const inp2={border:"0.5px solid #e2ddd6",borderRadius:14,padding:"12px 14px",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420",width:"100%"};
@@ -3170,8 +3205,13 @@ function App(){
               const cfg={...household,...editHHForm};
               setHouseholdCfg(cfg);
               applyHouseholdCfg(cfg);
-              setShowEditHH(false);
-              window.location.reload();
+              // Synka direkt till Supabase
+              const hid=localStorage.getItem("peas_hid");
+              window._supa.from("household_data").upsert(
+                {id:KEYS.household+"__"+hid,household_id:hid,value:cfg,updated_at:new Date().toISOString()},
+                {onConflict:"id"}
+              ).then(()=>{setShowEditHH(false);window.location.reload();})
+               .catch(()=>{setShowEditHH(false);window.location.reload();});
             }} style={{background:"#2c2420",border:"none",borderRadius:12,padding:"12px",color:"#fff",fontSize:14,fontFamily:"inherit",fontWeight:500,cursor:"pointer"}}>
               Spara ändringar
             </button>
