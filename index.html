@@ -1185,7 +1185,7 @@ function Grocery(){
         <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Inköpslista</button>
         <button onClick={()=>setSub("recipes")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Recept {recipes.length>0&&`(${recipes.length})`}</button>
       </div>
-      <SHdr title="Inköpslista">
+      <SHdr title="Inköpslista" extra={<button onClick={()=>setShowPantryMgr(true)} title="Skafferi" style={{background:"none",border:"none",cursor:"pointer",padding:2,fontSize:18}}>🥫</button>}>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {doneCount>0&&<button onClick={()=>setItems(items.filter(i=>!i.done))} style={{background:"none",border:"none",color:"#b8815a",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa {doneCount} avb.</button>}
           {items.length>0&&<button onClick={()=>setShowClearAll(true)} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa allt</button>}
