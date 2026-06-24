@@ -955,13 +955,15 @@ function Grocery(){
     return pantry.some(p=>n.includes(p.toLowerCase()));
   };
 
+  const [skippedPantryItems,setSkippedPantryItems]=useState([]);
+
   const addFromRecipe=r=>{
     const now=Date.now();
     const filtered=r.ingredients.filter(ing=>!isPantryItem(ing.name));
-    const skipped=r.ingredients.length-filtered.length;
+    const skipped=r.ingredients.filter(ing=>isPantryItem(ing.name));
     setItems(p=>[...p,...filtered.map((ing,i)=>({id:now+i,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false,recipeId:r.id,recipeName:r.title}))]);
+    if(skipped.length>0)setSkippedPantryItems(skipped);
     setSub("list");
-    if(skipped>0)setTimeout(()=>alert(skipped+" skafferivaror filtrerades bort. Ändra ditt skafferi under hus-ikonen."),100);
   };
   const saveRecipe=data=>{
     if(editRecipe)setRecipes(prev=>prev.map(r=>r.id===editRecipe?{...r,...data}:r));
@@ -1231,7 +1233,7 @@ function Grocery(){
       {showPantryMgr&&(
         <Modal title="Vårt skafferi" onClose={()=>setShowPantryMgr(false)}>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            <div style={{fontSize:13,color:"#6b6357",lineHeight:1.5}}>Listade skafferivaror filtreras automatiskt bort när du importerar recept till inköpslistan.</div>
+            <div style={{fontSize:13,color:"#6b6357",lineHeight:1.5}}>Skafferivaror filtreras automatiskt bort när du importerar recept till inköpslistan.</div>
             <div style={{display:"flex",gap:8}}>
               <input style={{flex:1,border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:13,fontFamily:"inherit",outline:"none",background:"#f7f4ef",color:"#2c2420"}}
                 placeholder="Lägg till vara..." value={newPantryItem}
@@ -1250,6 +1252,31 @@ function Grocery(){
             </div>
             <button onClick={()=>setPantry(["salt","peppar","olivolja","rapsolja","smör","socker","mjöl","vatten","vitlök","lök","ägg","mjölk","grädde","buljong","soja","vinäger","olja","örter","kryddor","matolja","solrosolja"])}
               style={{background:"none",border:"none",fontSize:11,color:"#9b9186",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>Återställ standardlista</button>
+          </div>
+        </Modal>
+      )}
+      {skippedPantryItems.length>0&&(
+        <Modal title="Skafferivaror hoppades över" onClose={()=>setSkippedPantryItems([])}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:13,color:"#6b6357"}}>Dessa ingredienser finns i ditt skafferi och lades inte till i inköpslistan. Har du dem hemma?</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {skippedPantryItems.map((ing,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
+                  <div>
+                    <span style={{fontSize:13,color:"#2c2420",fontWeight:500}}>{ing.name}</span>
+                    {ing.qty&&<span style={{fontSize:12,color:"#9b9186"}}> · {ing.qty}</span>}
+                  </div>
+                  <button onClick={()=>{
+                    const now=Date.now();
+                    setItems(p=>[...p,{id:now,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false}]);
+                    setSkippedPantryItems(p=>p.filter((_,j)=>j!==i));
+                  }} style={{fontSize:11,background:"#b8815a",color:"#fff",border:"none",borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>+ Lägg till</button>
+                </div>
+              ))}
+            </div>
+            <button onClick={()=>setSkippedPantryItems([])} style={{background:"#2c2420",border:"none",borderRadius:12,padding:"10px",color:"#fff",fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>
+              Stäng — allt finns hemma ✓
+            </button>
           </div>
         </Modal>
       )}
@@ -3353,11 +3380,6 @@ function App(){
             </button>
           )}
           <div style={{fontSize:11,color:"#9b9186"}}>Din partner anger koden eller öppnar länken för att gå med.</div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>{setShowHH(false);setTimeout(()=>window._openPantry&&window._openPantry(),100);}} style={{flex:1,background:"#f7f4ef",border:"0.5px solid #e2ddd6",borderRadius:10,padding:"8px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#2c2420",textAlign:"left"}}>
-              🥫 Skafferi
-            </button>
-          </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>{
               setEditHHForm({
