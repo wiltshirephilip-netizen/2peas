@@ -2966,10 +2966,7 @@ function Onboarding({onDone}){
       <input style={{...inp2,textAlign:"center",fontSize:22,letterSpacing:6,fontWeight:700,marginBottom:16}} placeholder="AB3XK"
         value={joinCode} onChange={e=>setJoinCode(e.target.value)}
         maxLength={20}/>
-      <div style={{fontSize:11,fontWeight:600,color:"#9b9186",letterSpacing:.4,marginBottom:8}}>PIN-KOD (om hushållet har en)</div>
-      <input style={{...inp2,textAlign:"center",letterSpacing:6,marginBottom:16}} placeholder="Lämna tom om ingen PIN"
-        type="password" inputMode="numeric" maxLength={4}
-        value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
+
       {err&&<div style={{fontSize:12,color:"#c0392b",marginBottom:12}}>{err}</div>}
       <button onClick={join} style={btn}>Logga in</button>
     </div>
