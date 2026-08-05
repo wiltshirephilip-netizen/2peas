@@ -591,6 +591,18 @@ function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,n
     return true;
   });
 
+  const sortMenuByDay=()=>{
+    setWeeklyMenu(prev=>{
+      const arr=[...(prev||[])];
+      arr.sort((a,b)=>{
+        const da=a.day==null?7:a.day;
+        const db=b.day==null?7:b.day;
+        return da-db;
+      });
+      return arr;
+    });
+  };
+
   const bannerMsgs=[...pickupWarnings];
   next7.forEach(({date})=>{
     const evs=allEvents.filter(e=>e.date===date);
@@ -635,7 +647,10 @@ function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,n
       <div style={{marginBottom:20}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <span style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420"}}>Veckomeny</span>
-          {weeklyMenu&&weeklyMenu.length>0&&<button onClick={()=>setWeeklyMenu([])} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa meny</button>}
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            {weeklyMenu&&weeklyMenu.length>1&&<button onClick={sortMenuByDay} style={{background:"none",border:"none",color:"#4a5a8c",fontSize:12,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4}}><Ic n="repeat" s={13} color="#4a5a8c"/> Ordna kronologiskt</button>}
+            {weeklyMenu&&weeklyMenu.length>0&&<button onClick={()=>setWeeklyMenu([])} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa meny</button>}
+          </div>
         </div>
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           <input style={{...inp,flex:1,fontSize:14,padding:"9px 12px"}} placeholder="Lägg till rätt (fritext)…" value={freeMenuInput} onChange={e=>setFreeMenuInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addFreeMenuItem()}/>
