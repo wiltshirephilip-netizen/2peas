@@ -478,16 +478,39 @@ function filterTodosForViewer(todos,vid){return todos.filter(t=>!t.hiddenFrom||t
 function todoVisibility(vid,hf){if(!hf)return"both";const partner=vid==="a"?"b":"a";return hf===partner?"me":"both";}
 
 // ─── WEEKLY MENU ROW ────────────────────────────────────────────────────────
-function WeeklyMenuRow({m,isLast,onSetDay,onSetNote,onRemove}){
+function WeeklyMenuRow({m,recipes,isLast,onSetDay,onSetNote,onRemove}){
   const [noteVal,setNoteVal]=useState(m.note||"");
   const [showNote,setShowNote]=useState(!!m.note);
+  const [showDetail,setShowDetail]=useState(false);
+  const recipe=m.recipeId?(recipes||[]).find(r=>r.id===m.recipeId):null;
   return(
     <div style={{padding:"10px 14px",borderBottom:isLast?"none":"0.5px solid #f2ede6"}}>
       <div style={{display:"flex",alignItems:"center",gap:8}}>
-        <span style={{fontSize:14,color:"#2c2420",flex:1,fontWeight:500}}>🍽 {m.recipeName}</span>
+        <span onClick={()=>recipe&&setShowDetail(true)} style={{fontSize:14,color:"#2c2420",flex:1,fontWeight:500,cursor:recipe?"pointer":"default",textDecoration:recipe?"underline":"none",textDecorationColor:"#e2ddd6",textUnderlineOffset:3}}>🍽 {m.recipeName}</span>
         <button onClick={()=>setShowNote(s=>!s)} title="Kommentar" style={{background:"none",border:"none",cursor:"pointer",color:"#c4bcaf",padding:2}}><Ic n="pencil" s={14}/></button>
         <button onClick={onRemove} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
       </div>
+      {showDetail&&recipe&&(
+        <Modal title={recipe.title} onClose={()=>setShowDetail(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {recipe.url&&<a href={recipe.url} target="_blank" rel="noopener noreferrer" style={{...btnP,display:"flex",alignItems:"center",justifyContent:"center",gap:8,textDecoration:"none",boxSizing:"border-box"}}><Ic n="link" s={16} color="#fff"/> Öppna recept</a>}
+            {(recipe.ingredients&&recipe.ingredients.length>0)&&(
+              <div>
+                <div style={{fontSize:12,color:"#9b9186",marginBottom:8}}>Ingredienser</div>
+                {recipe.ingredients.map((ing,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:i<recipe.ingredients.length-1?"0.5px solid #f2ede6":"none"}}>
+                    <span style={{fontSize:13,color:"#2c2420"}}>{ing.name}</span>
+                    {ing.qty&&<span style={{fontSize:12,color:"#9b9186"}}>{ing.qty}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {!recipe.url&&(!recipe.ingredients||recipe.ingredients.length===0)&&(
+              <div style={{fontSize:13,color:"#9b9186"}}>Inga detaljer sparade för det här receptet.</div>
+            )}
+          </div>
+        </Modal>
+      )}
       <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:8}}>
         <button onClick={()=>onSetDay(null)} style={{padding:"3px 8px",borderRadius:10,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",background:m.day==null?"#2c2420":"#ede8e1",color:m.day==null?"#fff":"#6b6357"}}>Ingen dag</button>
         {MENU_DAY_LABELS.map((lbl,idx)=>(
@@ -514,6 +537,14 @@ function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,n
   const allEvents=[...expandedUser,...expiryToCalendarEvents(expiryItems)];
   const next7=getNext7Days();
   const viewer=PERSONS.find(p=>p.id===viewerId)||PA;
+  const [allRecipes]=useLS(KEYS.recipes,[]);
+  const [freeMenuInput,setFreeMenuInput]=useState("");
+  const addFreeMenuItem=()=>{
+    const name=freeMenuInput.trim();
+    if(!name)return;
+    setWeeklyMenu(prev=>[...(prev||[]),{id:Date.now(),recipeId:null,recipeName:name,day:null,note:""}]);
+    setFreeMenuInput("");
+  };
 
   const [boardNotes,setBoardNotes]=useLS(KEYS.noticeboard,[]);
   const [boardInput,setBoardInput]=useState("");
@@ -606,14 +637,18 @@ function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,n
           <span style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420"}}>Veckomeny</span>
           {weeklyMenu&&weeklyMenu.length>0&&<button onClick={()=>setWeeklyMenu([])} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa meny</button>}
         </div>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          <input style={{...inp,flex:1,fontSize:14,padding:"9px 12px"}} placeholder="Lägg till rätt (fritext)…" value={freeMenuInput} onChange={e=>setFreeMenuInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addFreeMenuItem()}/>
+          <button onClick={addFreeMenuItem} style={{width:36,height:36,borderRadius:10,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
+        </div>
         {(!weeklyMenu||weeklyMenu.length===0)?(
           <div style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",padding:"16px 14px",textAlign:"center",color:"#9b9186",fontSize:13}}>
-            Inga rätter i veckomenyn än. Lägg till från receptlistan.
+            Inga rätter i veckomenyn än. Lägg till här ovan, eller från receptlistan.
           </div>
         ):(
           <Card>
             {weeklyMenu.map((m,i)=>(
-              <WeeklyMenuRow key={m.id} m={m} isLast={i===weeklyMenu.length-1}
+              <WeeklyMenuRow key={m.id} m={m} recipes={allRecipes} isLast={i===weeklyMenu.length-1}
                 onSetDay={day=>setWeeklyMenu(weeklyMenu.map(x=>x.id===m.id?{...x,day}:x))}
                 onSetNote={note=>setWeeklyMenu(weeklyMenu.map(x=>x.id===m.id?{...x,note}:x))}
                 onRemove={()=>setWeeklyMenu(weeklyMenu.filter(x=>x.id!==m.id))}
@@ -1032,9 +1067,19 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
   // Exponera setShowPantryMgr globalt så hus-menyn kan öppna den
   React.useEffect(()=>{window._openPantry=()=>setShowPantryMgr(true);},[]);
 
+  const wordsOf=s=>s.toLowerCase().split(/[^a-zA-ZåäöÅÄÖ]+/).filter(Boolean);
   const isPantryItem=(name)=>{
-    const n=name.toLowerCase();
-    return pantry.some(p=>n.includes(p.toLowerCase()));
+    const nameWords=wordsOf(name);
+    if(nameWords.length===0)return false;
+    return pantry.some(p=>{
+      const pWords=wordsOf(p);
+      if(pWords.length===0)return false;
+      if(pWords.length===1)return nameWords.includes(pWords[0]);
+      // multi-word pantry phrase: require the exact word sequence to appear
+      const nameStr=" "+nameWords.join(" ")+" ";
+      const pStr=" "+pWords.join(" ")+" ";
+      return nameStr.includes(pStr);
+    });
   };
 
   const [postAdd,setPostAdd]=useState(null); // {recipe, skipped:[{name,qty,recipeId,recipeName}]}
@@ -1303,11 +1348,14 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
           <button onClick={()=>setF({...f,cat:"",targetGroup:null})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.cat===""&&!f.targetGroup)?"#2c2420":"#ede8e1",color:(f.cat===""&&!f.targetGroup)?"#fff":"#6b6357",border:"none"}}>Ingen</button>
           {groceryCats.map(c=>(<button key={c} onClick={()=>setF({...f,cat:c===f.cat?"":c,targetGroup:null})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.cat===c&&!f.targetGroup)?"#b8815a":"#ede8e1",color:(f.cat===c&&!f.targetGroup)?"#fff":"#6b6357",border:"none"}}>{c}</button>))}
         </div>
-        {(recipeHeadings.length>0||customHeadingsList.length>0||showNewHeadingInput)&&(
+        {(()=>{
+          const pendingCustom=(f.targetGroup&&f.targetGroup.type==="custom"&&!customHeadingsList.some(h=>h.name===f.targetGroup.name))?f.targetGroup:null;
+          return(recipeHeadings.length>0||customHeadingsList.length>0||showNewHeadingInput||pendingCustom)&&(
           <div style={{display:"flex",gap:5,flex:"1 1 100%",flexWrap:"wrap",alignItems:"center"}}>
             <span style={{fontSize:10,color:"#c4bcaf"}}>eller under rubrik:</span>
             {recipeHeadings.map(h=>(<button key={"r"+h.id} onClick={()=>setF({...f,targetGroup:(f.targetGroup&&f.targetGroup.type==="recipe"&&f.targetGroup.id===h.id)?null:h})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.targetGroup&&f.targetGroup.type==="recipe"&&f.targetGroup.id===h.id)?"#b8815a":"#eef0f8",color:(f.targetGroup&&f.targetGroup.type==="recipe"&&f.targetGroup.id===h.id)?"#fff":"#4a5a8c",border:"none"}}>🍽 {h.name}</button>))}
             {customHeadingsList.map(h=>(<button key={"c"+h.name} onClick={()=>setF({...f,targetGroup:(f.targetGroup&&f.targetGroup.type==="custom"&&f.targetGroup.name===h.name)?null:h})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.targetGroup&&f.targetGroup.type==="custom"&&f.targetGroup.name===h.name)?"#b8815a":"#fbeee6",color:(f.targetGroup&&f.targetGroup.type==="custom"&&f.targetGroup.name===h.name)?"#fff":"#b8815a",border:"none"}}>📌 {h.name}</button>))}
+            {pendingCustom&&(<button onClick={()=>setF({...f,targetGroup:null})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:"#b8815a",color:"#fff",border:"none"}}>📌 {pendingCustom.name} — vald ✕</button>)}
             {!showNewHeadingInput&&<button onClick={()=>setShowNewHeadingInput(true)} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357",border:"none"}}>+ Ny rubrik</button>}
             {showNewHeadingInput&&(
               <div style={{display:"flex",gap:4,alignItems:"center"}}>
@@ -1318,7 +1366,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
               </div>
             )}
           </div>
-        )}
+        );})()}
       </div>
 
       {items.length===0&&<Empty n="cart" text="Skriv en vara ovan och tryck Enter!"/>}
