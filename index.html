@@ -30,6 +30,7 @@ select{font-family:inherit;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
+
 const { useState, useEffect, useRef } = React;
 
 const KEYS={
@@ -39,7 +40,8 @@ const KEYS={
   activities:"peas_activities",knowledge:"peas_knowledge",budget:"peas_budget",
   budgetTemplates:"peas_budget_tpl",budgetSettled:"peas_budget_settled",
   household:"peas_household_cfg",pin:"peas_pin",pinSession:"peas_pin_session",pickupEnabled:"peas_pickup_enabled",
-  actPauses:"peas_act_pauses"
+  actPauses:"peas_act_pauses",
+  weeklyMenu:"peas_weekly_menu",weeklyMenuWeekKey:"peas_weekly_menu_weekkey"
 };
 
 // PIN och viewer sparas lokalt per enhet
@@ -312,6 +314,25 @@ function getNext7Days(){
 function addDaysStr(s,n){const d=new Date(s+"T12:00:00");d.setDate(d.getDate()+n);return fmt(d);}
 function daysBetween(a,b){return Math.round((new Date(b+"T12:00:00")-new Date(a+"T12:00:00"))/86400000);}
 
+// Weekly menu week-key helpers: the menu resets whenever a new "work week" begins.
+// If today is Sat/Sun, the key points to next Monday (so it stays cleared through the weekend).
+function getMondayOf(dateStr){
+  const d=new Date(dateStr+"T12:00:00");
+  const dow=(d.getDay()+6)%7;
+  d.setDate(d.getDate()-dow);
+  return fmt(d);
+}
+function getMenuWeekKey(){
+  const d=new Date();
+  const dow=(d.getDay()+6)%7; // 0 Mon .. 6 Sun
+  if(dow>=5){
+    const nd=new Date(d);nd.setDate(nd.getDate()+(7-dow));
+    return fmt(nd);
+  }
+  return getMondayOf(fmt(d));
+}
+const MENU_DAY_LABELS=["Mån","Tis","Ons","Tor","Fre","Lör","Sön"];
+
 // Normalize time: handles 9, 930, 1830, 09:00, 9:30 etc.
 function normalizeTime(t){
   if(!t||!t.trim())return null;
@@ -456,8 +477,36 @@ function PickupPersonBadge({slot,personField,emoji}){
 function filterTodosForViewer(todos,vid){return todos.filter(t=>!t.hiddenFrom||t.hiddenFrom!==vid);}
 function todoVisibility(vid,hf){if(!hf)return"both";const partner=vid==="a"?"b":"a";return hf===partner?"me":"both";}
 
+// ─── WEEKLY MENU ROW ────────────────────────────────────────────────────────
+function WeeklyMenuRow({m,isLast,onSetDay,onSetNote,onRemove}){
+  const [noteVal,setNoteVal]=useState(m.note||"");
+  const [showNote,setShowNote]=useState(!!m.note);
+  return(
+    <div style={{padding:"10px 14px",borderBottom:isLast?"none":"0.5px solid #f2ede6"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontSize:14,color:"#2c2420",flex:1,fontWeight:500}}>🍽 {m.recipeName}</span>
+        <button onClick={()=>setShowNote(s=>!s)} title="Kommentar" style={{background:"none",border:"none",cursor:"pointer",color:"#c4bcaf",padding:2}}><Ic n="pencil" s={14}/></button>
+        <button onClick={onRemove} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="x" s={16}/></button>
+      </div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:8}}>
+        <button onClick={()=>onSetDay(null)} style={{padding:"3px 8px",borderRadius:10,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",background:m.day==null?"#2c2420":"#ede8e1",color:m.day==null?"#fff":"#6b6357"}}>Ingen dag</button>
+        {MENU_DAY_LABELS.map((lbl,idx)=>(
+          <button key={idx} onClick={()=>onSetDay(idx)} style={{padding:"3px 8px",borderRadius:10,fontSize:11,cursor:"pointer",fontFamily:"inherit",border:"none",background:m.day===idx?"#b8815a":"#ede8e1",color:m.day===idx?"#fff":"#6b6357"}}>{lbl}</button>
+        ))}
+      </div>
+      {showNote&&(
+        <input style={{...inp,marginTop:8,fontSize:12,padding:"6px 10px"}} placeholder="Kommentar, t.ex. Tina kyckling" value={noteVal}
+          onChange={e=>setNoteVal(e.target.value)}
+          onBlur={()=>onSetNote(noteVal)}
+          onKeyDown={e=>e.key==="Enter"&&onSetNote(noteVal)}/>
+      )}
+      {!showNote&&m.note&&<div style={{fontSize:12,color:"#9b9186",marginTop:6,fontStyle:"italic"}}>{m.note}</div>}
+    </div>
+  );
+}
+
 // ─── BRIEFING ─────────────────────────────────────────────────────────────────
-function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,navigateTo,pickupEnabled,actPauses}){
+function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,navigateTo,pickupEnabled,actPauses,weeklyMenu,setWeeklyMenu}){
   const visible=filterTodosForViewer(todos,viewerId);
   // FIX: correctly expand and dedupe events for briefing
   const FAR_FUTURE=addDaysStr(TODAY,5475);
@@ -551,6 +600,28 @@ function Briefing({todos,userEvents,pickupData,activities,expiryItems,viewerId,n
           </Card>
         </div>
       )}
+
+      <div style={{marginBottom:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <span style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420"}}>Veckomeny</span>
+          {weeklyMenu&&weeklyMenu.length>0&&<button onClick={()=>setWeeklyMenu([])} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa meny</button>}
+        </div>
+        {(!weeklyMenu||weeklyMenu.length===0)?(
+          <div style={{background:"#fff",borderRadius:14,border:"0.5px solid #e2ddd6",padding:"16px 14px",textAlign:"center",color:"#9b9186",fontSize:13}}>
+            Inga rätter i veckomenyn än. Lägg till från receptlistan.
+          </div>
+        ):(
+          <Card>
+            {weeklyMenu.map((m,i)=>(
+              <WeeklyMenuRow key={m.id} m={m} isLast={i===weeklyMenu.length-1}
+                onSetDay={day=>setWeeklyMenu(weeklyMenu.map(x=>x.id===m.id?{...x,day}:x))}
+                onSetNote={note=>setWeeklyMenu(weeklyMenu.map(x=>x.id===m.id?{...x,note}:x))}
+                onRemove={()=>setWeeklyMenu(weeklyMenu.filter(x=>x.id!==m.id))}
+              />
+            ))}
+          </Card>
+        )}
+      </div>
 
       <div style={{marginBottom:20}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#2c2420",marginBottom:12}}>Veckan som kommer</div>
@@ -776,7 +847,7 @@ function RecipeForm({initial,onSave,onClose,ambitionOpts=RECIPE_AMBITION,timeOpt
   );
 }
 
-function RecipeCard({r,onAddToList,onEdit,onDelete,ambitionOpts=RECIPE_AMBITION,timeOpts=RECIPE_TIME}){
+function RecipeCard({r,onAddToList,onAddToMenu,onEdit,onDelete,ambitionOpts=RECIPE_AMBITION,timeOpts=RECIPE_TIME}){
   const [open,setOpen]=useState(false);
   const amb=ambitionOpts.find(a=>a.id===r.ambition);
   const ti=timeOpts.find(t=>t.id===r.time);
@@ -791,7 +862,8 @@ function RecipeCard({r,onAddToList,onEdit,onDelete,ambitionOpts=RECIPE_AMBITION,
             {r.rating>0&&<div style={{display:"flex",gap:2}}>{[1,2,3,4,5].map(n=>(<svg key={n} xmlns="http://www.w3.org/2000/svg" width={13} height={13} viewBox="0 0 24 24" fill={r.rating>=n?"#f39c12":"none"} stroke="#f39c12" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d={PATHS.star}/></svg>))}</div>}
           </div>
         </div>
-        {/* Quick add button always visible */}
+        {/* Quick add buttons always visible */}
+        <button onClick={()=>onAddToMenu(r)} title="Lägg till i veckomenyn" style={{height:36,padding:"0 10px",borderRadius:10,background:"#ede8e1",color:"#2c2420",border:"none",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>+ Meny</button>
         <button onClick={()=>onAddToList(r)} title="Lägg till i inköpslistan" style={{height:36,padding:"0 12px",borderRadius:10,background:"#b8815a",color:"#fff",border:"none",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>+ Lista</button>
         <span onClick={()=>setOpen(!open)} style={{color:"#c4bcaf",fontSize:18,cursor:"pointer",paddingTop:4}}>{open?"▾":"▸"}</span>
       </div>
@@ -815,13 +887,15 @@ function RecipeCard({r,onAddToList,onEdit,onDelete,ambitionOpts=RECIPE_AMBITION,
   );
 }
 
-function Grocery(){
+function Grocery({weeklyMenu,setWeeklyMenu}){
   const [sub,setSub]=useState("list");
   const [items,setItems]=useLS(KEYS.grocery,[{id:1,name:"Mjölk",qty:"2 st",person:"a",done:false},{id:2,name:"Pasta",qty:"500 g",person:"b",done:false}]);
   const [recipes,setRecipes]=useLS(KEYS.recipes,[]);
   const defaultCats=["Mejeri","Frukt & grönt","Kött & fisk","Torrvaror","Hygien","Hushåll","Övrigt"];
   const [groceryCats,setGroceryCats]=useLS(KEYS.groceryCats,defaultCats);
-  const [f,setF]=useState({name:"",qty:"",person:"a",cat:""});
+  const [f,setF]=useState({name:"",qty:"",person:"a",cat:"",targetGroup:null});
+  const [showNewHeadingInput,setShowNewHeadingInput]=useState(false);
+  const [newHeadingName,setNewHeadingName]=useState("");
   const [groceryTemplates,setGroceryTemplates]=useLS(KEYS.groceryTemplates,[]);
   const [showTplMgr,setShowTplMgr]=useState(false);
   const [editTpl,setEditTpl]=useState(null);
@@ -936,7 +1010,15 @@ function Grocery(){
   const doneCount=items.filter(i=>i.done).length;
   const add=()=>{
     if(!f.name.trim())return;
-    setItems(p=>[...p,{id:Date.now(),name:f.name.trim(),qty:f.qty.trim(),person:f.person,cat:f.cat||"",done:false}]);
+    const base={id:Date.now(),name:f.name.trim(),qty:f.qty.trim(),person:f.person,done:false};
+    if(f.targetGroup&&f.targetGroup.type==="recipe"){
+      base.recipeId=f.targetGroup.id;base.recipeName=f.targetGroup.name;base.cat="";
+    } else if(f.targetGroup&&f.targetGroup.type==="custom"){
+      base.customGroup=f.targetGroup.name;base.cat="";
+    } else {
+      base.cat=f.cat||"";
+    }
+    setItems(p=>[...p,base]);
     setF(p=>({...p,name:"",qty:""}));
     setTimeout(()=>nameRef.current&&nameRef.current.focus(),10);
   };
@@ -955,14 +1037,22 @@ function Grocery(){
     return pantry.some(p=>n.includes(p.toLowerCase()));
   };
 
-  const [skippedPantryItems,setSkippedPantryItems]=useState([]);
+  const [postAdd,setPostAdd]=useState(null); // {recipe, skipped:[{name,qty,recipeId,recipeName}]}
+
+  const addRecipeToMenu=r=>{
+    setWeeklyMenu(prev=>{
+      const list=prev||[];
+      if(list.some(m=>m.recipeId===r.id))return list;
+      return [...list,{id:Date.now(),recipeId:r.id,recipeName:r.title,day:null,note:""}];
+    });
+  };
 
   const addFromRecipe=r=>{
     const now=Date.now();
     const filtered=r.ingredients.filter(ing=>!isPantryItem(ing.name));
-    const skipped=r.ingredients.filter(ing=>isPantryItem(ing.name));
+    const skipped=r.ingredients.filter(ing=>isPantryItem(ing.name)).map(ing=>({...ing,recipeId:r.id,recipeName:r.title}));
     setItems(p=>[...p,...filtered.map((ing,i)=>({id:now+i,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false,recipeId:r.id,recipeName:r.title}))]);
-    if(skipped.length>0)setSkippedPantryItems(skipped);
+    setPostAdd({recipe:r,skipped});
     setSub("list");
   };
   const saveRecipe=data=>{
@@ -971,19 +1061,25 @@ function Grocery(){
     setEditRecipe(null);
   };
 
-  // Group: recipe items by recipe, free items by category
+  // Group: recipe items by recipe, custom-heading items by heading, free items by category
   const recipeItemsByRecipe={};
+  const customGroupItems={};
   const freeItemsByCat={};
   items.forEach(i=>{
     if(i.recipeId){
       if(!recipeItemsByRecipe[i.recipeId])recipeItemsByRecipe[i.recipeId]={name:i.recipeName,items:[]};
       recipeItemsByRecipe[i.recipeId].items.push(i);
+    } else if(i.customGroup){
+      if(!customGroupItems[i.customGroup])customGroupItems[i.customGroup]={name:i.customGroup,items:[]};
+      customGroupItems[i.customGroup].items.push(i);
     } else {
       const cat=i.cat||"";
       if(!freeItemsByCat[cat])freeItemsByCat[cat]=[];
       freeItemsByCat[cat].push(i);
     }
   });
+  const recipeHeadings=Object.entries(recipeItemsByRecipe).map(([rid,g])=>({type:"recipe",id:rid,name:g.name}));
+  const customHeadingsList=Object.keys(customGroupItems).map(name=>({type:"custom",name}));
   // Sort: uncategorized first (""), then named cats
   const catOrder=["", ...groceryCats];
   const sortedCatEntries=Object.entries(freeItemsByCat).sort(([a],[b])=>{
@@ -1083,7 +1179,7 @@ function Grocery(){
         </div>
       </div>
       {filteredRecipes.length===0&&<Empty n="spark" text={recipes.length===0?"Spara ert första recept!":"Inga recept matchar filtret"}/>}
-      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} ambitionOpts={ambitionOpts} timeOpts={timeOpts} onAddToList={addFromRecipe} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
+      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} ambitionOpts={ambitionOpts} timeOpts={timeOpts} onAddToList={addFromRecipe} onAddToMenu={addRecipeToMenu} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
       {showImport&&(
         <Modal title="Importera recept" onClose={()=>{setShowImport(false);setImportUrl("");setImportError("");}}>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -1204,9 +1300,25 @@ function Grocery(){
         </div>
         {/* Category row */}
         <div style={{display:"flex",gap:5,flex:"1 1 100%",flexWrap:"wrap"}}>
-          <button onClick={()=>setF({...f,cat:""})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.cat===""?"#2c2420":"#ede8e1",color:f.cat===""?"#fff":"#6b6357",border:"none"}}>Ingen</button>
-          {groceryCats.map(c=>(<button key={c} onClick={()=>setF({...f,cat:c===f.cat?"":c})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:f.cat===c?"#b8815a":"#ede8e1",color:f.cat===c?"#fff":"#6b6357",border:"none"}}>{c}</button>))}
+          <button onClick={()=>setF({...f,cat:"",targetGroup:null})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.cat===""&&!f.targetGroup)?"#2c2420":"#ede8e1",color:(f.cat===""&&!f.targetGroup)?"#fff":"#6b6357",border:"none"}}>Ingen</button>
+          {groceryCats.map(c=>(<button key={c} onClick={()=>setF({...f,cat:c===f.cat?"":c,targetGroup:null})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.cat===c&&!f.targetGroup)?"#b8815a":"#ede8e1",color:(f.cat===c&&!f.targetGroup)?"#fff":"#6b6357",border:"none"}}>{c}</button>))}
         </div>
+        {(recipeHeadings.length>0||customHeadingsList.length>0||showNewHeadingInput)&&(
+          <div style={{display:"flex",gap:5,flex:"1 1 100%",flexWrap:"wrap",alignItems:"center"}}>
+            <span style={{fontSize:10,color:"#c4bcaf"}}>eller under rubrik:</span>
+            {recipeHeadings.map(h=>(<button key={"r"+h.id} onClick={()=>setF({...f,targetGroup:(f.targetGroup&&f.targetGroup.type==="recipe"&&f.targetGroup.id===h.id)?null:h})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.targetGroup&&f.targetGroup.type==="recipe"&&f.targetGroup.id===h.id)?"#b8815a":"#eef0f8",color:(f.targetGroup&&f.targetGroup.type==="recipe"&&f.targetGroup.id===h.id)?"#fff":"#4a5a8c",border:"none"}}>🍽 {h.name}</button>))}
+            {customHeadingsList.map(h=>(<button key={"c"+h.name} onClick={()=>setF({...f,targetGroup:(f.targetGroup&&f.targetGroup.type==="custom"&&f.targetGroup.name===h.name)?null:h})} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:(f.targetGroup&&f.targetGroup.type==="custom"&&f.targetGroup.name===h.name)?"#b8815a":"#fbeee6",color:(f.targetGroup&&f.targetGroup.type==="custom"&&f.targetGroup.name===h.name)?"#fff":"#b8815a",border:"none"}}>📌 {h.name}</button>))}
+            {!showNewHeadingInput&&<button onClick={()=>setShowNewHeadingInput(true)} style={{padding:"4px 10px",borderRadius:14,fontSize:11,cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357",border:"none"}}>+ Ny rubrik</button>}
+            {showNewHeadingInput&&(
+              <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                <input autoFocus style={{...inp,padding:"4px 8px",fontSize:11,width:120}} placeholder="Rubriknamn" value={newHeadingName} onChange={e=>setNewHeadingName(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter"&&newHeadingName.trim()){setF({...f,targetGroup:{type:"custom",name:newHeadingName.trim()}});setNewHeadingName("");setShowNewHeadingInput(false);}}}/>
+                <button onClick={()=>{if(newHeadingName.trim()){setF({...f,targetGroup:{type:"custom",name:newHeadingName.trim()}});setNewHeadingName("");setShowNewHeadingInput(false);}}} style={{background:"#b8815a",border:"none",borderRadius:8,padding:"4px 8px",color:"#fff",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>OK</button>
+                <button onClick={()=>{setShowNewHeadingInput(false);setNewHeadingName("");}} style={{background:"none",border:"none",color:"#9b9186",cursor:"pointer",fontSize:11}}>Avbryt</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {items.length===0&&<Empty n="cart" text="Skriv en vara ovan och tryck Enter!"/>}
@@ -1225,6 +1337,17 @@ function Grocery(){
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
             <span style={{fontSize:12,fontWeight:600,color:"#b8815a"}}>🍽 {group.name}</span>
             <button onClick={()=>setItems(items.filter(i=>String(i.recipeId)!==String(rid)))} style={{fontSize:11,color:"#c4bcaf",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Ta bort</button>
+          </div>
+          <Card>{group.items.map((it,i)=>renderItem(it,i===group.items.length-1))}</Card>
+        </div>
+      ))}
+
+      {/* Custom heading groups */}
+      {Object.entries(customGroupItems).map(([name,group])=>(
+        <div key={"cg-"+name} style={{marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <span style={{fontSize:12,fontWeight:600,color:"#b8815a"}}>📌 {group.name}</span>
+            <button onClick={()=>setItems(items.filter(i=>i.customGroup!==name))} style={{fontSize:11,color:"#c4bcaf",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Ta bort</button>
           </div>
           <Card>{group.items.map((it,i)=>renderItem(it,i===group.items.length-1))}</Card>
         </div>
@@ -1255,28 +1378,36 @@ function Grocery(){
           </div>
         </Modal>
       )}
-      {skippedPantryItems.length>0&&(
-        <Modal title="Skafferivaror hoppades över" onClose={()=>setSkippedPantryItems([])}>
-          <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            <div style={{fontSize:13,color:"#6b6357"}}>Dessa ingredienser finns i ditt skafferi och lades inte till i inköpslistan. Har du dem hemma?</div>
-            <div style={{display:"flex",flexDirection:"column",gap:6}}>
-              {skippedPantryItems.map((ing,i)=>(
-                <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
-                  <div>
-                    <span style={{fontSize:13,color:"#2c2420",fontWeight:500}}>{ing.name}</span>
-                    {ing.qty&&<span style={{fontSize:12,color:"#9b9186"}}> · {ing.qty}</span>}
-                  </div>
-                  <button onClick={()=>{
-                    const now=Date.now();
-                    setItems(p=>[...p,{id:now,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false}]);
-                    setSkippedPantryItems(p=>p.filter((_,j)=>j!==i));
-                  }} style={{fontSize:11,background:"#b8815a",color:"#fff",border:"none",borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>+ Lägg till</button>
+      {postAdd&&(
+        <Modal title="Tillagt i listan" onClose={()=>setPostAdd(null)}>
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            {postAdd.skipped.length>0&&(
+              <div>
+                <div style={{fontSize:13,color:"#6b6357",marginBottom:8}}>Dessa ingredienser finns i ditt skafferi. Har du dem hemma?</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {postAdd.skipped.map((ing,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f7f4ef",borderRadius:10,padding:"8px 12px"}}>
+                      <div>
+                        <span style={{fontSize:13,color:"#2c2420",fontWeight:500}}>{ing.name}</span>
+                        {ing.qty&&<span style={{fontSize:12,color:"#9b9186"}}> · {ing.qty}</span>}
+                      </div>
+                      <button onClick={()=>{
+                        const now=Date.now();
+                        setItems(p=>[...p,{id:now,name:ing.name,qty:ing.qty||"",person:"a",cat:"",done:false,recipeId:ing.recipeId,recipeName:ing.recipeName}]);
+                        setPostAdd(pa=>pa?{...pa,skipped:pa.skipped.filter((_,j)=>j!==i)}:pa);
+                      }} style={{fontSize:11,background:"#b8815a",color:"#fff",border:"none",borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>+ Lägg till</button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+            )}
+            <div style={{borderTop:postAdd.skipped.length>0?"0.5px solid #f2ede6":"none",paddingTop:postAdd.skipped.length>0?14:0}}>
+              <div style={{fontSize:13,color:"#2c2420",marginBottom:10,fontWeight:500}}>Lägg till "{postAdd.recipe.title}" i veckomenyn?</div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>{addRecipeToMenu(postAdd.recipe);setPostAdd(null);}} style={{...btnP,flex:1}}>Ja, lägg till</button>
+                <button onClick={()=>setPostAdd(null)} style={{...btnP,flex:1,background:"#ede8e1",color:"#6b6357"}}>Nej tack</button>
+              </div>
             </div>
-            <button onClick={()=>setSkippedPantryItems([])} style={{background:"#2c2420",border:"none",borderRadius:12,padding:"10px",color:"#fff",fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>
-              Stäng — allt finns hemma ✓
-            </button>
           </div>
         </Modal>
       )}
@@ -2106,6 +2237,60 @@ const BUDGET_CATS=[
   {id:"ovr_utg",label:"Övrigt",        icon:"💳", type:"expense", person:null},
 ];
 
+function BudgetHistoryRow({r,monthLabel}){
+  const [expanded,setExpanded]=useState(false);
+  const entries=r.entries||[];
+  const incomes=entries.filter(e=>e.type==="income");
+  const expenses=entries.filter(e=>e.type==="expense");
+  return(
+    <div style={{borderBottom:"0.5px solid #f2ede6"}}>
+      <div onClick={()=>setExpanded(!expanded)} style={{padding:"11px 14px",cursor:"pointer"}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+          <span style={{fontSize:13,fontWeight:500,color:"#2c2420"}}>{monthLabel(r.month)}</span>
+          <span style={{color:"#c4bcaf",fontSize:12}}>{expanded?"▾":"▸"}</span>
+        </div>
+        {r.owes?<div style={{fontSize:12,color:"#b8815a"}}>{r.owes.from.label} betalade {sek(r.owes.amount)} till {r.owes.to.label}</div>
+        :<div style={{fontSize:12,color:"#5a8c5a"}}>Jämnt! 🎉</div>}
+      </div>
+      {expanded&&(
+        <div style={{padding:"0 14px 12px"}}>
+          <div style={{display:"flex",gap:10,marginBottom:10}}>
+            {PERSONS.map(p=>(
+              <div key={p.id} style={{flex:1,background:"#fff",borderRadius:10,padding:"8px 10px",border:"0.5px solid #e2ddd6"}}>
+                <div style={{fontSize:11,color:"#9b9186",marginBottom:2}}>{p.label}</div>
+                <div style={{fontSize:11,color:"#9b9186"}}>Netto: <span style={{fontWeight:600,color:"#2c2420"}}>{sek(p.id==="a"?r.netA:r.netB)}</span></div>
+              </div>
+            ))}
+          </div>
+          {entries.length===0&&<div style={{fontSize:12,color:"#9b9186",fontStyle:"italic"}}>Ingen postdetalj sparad för denna uppgörelse.</div>}
+          {incomes.length>0&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,fontWeight:600,color:"#5a8c5a",marginBottom:4}}>INKOMSTER</div>
+              {incomes.map(e=>(
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}>
+                  <span style={{fontSize:12,color:"#2c2420"}}>{e.icon} {e.label}</span>
+                  <span style={{fontSize:12,fontWeight:500,color:"#2c2420"}}>{sek(e.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {expenses.length>0&&(
+            <div>
+              <div style={{fontSize:10,fontWeight:600,color:"#c0392b",marginBottom:4}}>UTGIFTER</div>
+              {expenses.map(e=>(
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",padding:"3px 0"}}>
+                  <span style={{fontSize:12,color:"#2c2420"}}>{e.icon} {e.label}</span>
+                  <span style={{fontSize:12,fontWeight:500,color:"#2c2420"}}>{sek(e.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BudgetTab(){
   const now=new Date();
   const [templates,setTemplates]=useLS(KEYS.budgetTemplates,[]);
@@ -2196,7 +2381,7 @@ function BudgetTab(){
   const budgetOwes=netDiff>1?{from:PA,to:PB,amount:netDiff/2}:netDiff<-1?{from:PB,to:PA,amount:Math.abs(netDiff)/2}:null;
 
   const doSettle=()=>{
-    setBudgetSettled([{id:Date.now(),month:activeMonth,netA,netB,owes:budgetOwes,totalIncome,totalExpense},...budgetSettled]);
+    setBudgetSettled([{id:Date.now(),month:activeMonth,netA,netB,owes:budgetOwes,totalIncome,totalExpense,incA,incB,paidA,paidB,entries:[...entries]},...budgetSettled]);
     saveEntries([]);setShowSettle(false);
   };
 
@@ -2337,16 +2522,7 @@ function BudgetTab(){
         <div>
           <div style={{fontSize:12,color:"#9b9186",marginBottom:8,fontWeight:500}}>Gjorda uppgörelser</div>
           <Card>
-            {budgetSettled.slice(0,4).map((r,i)=>(
-              <div key={r.id} style={{padding:"11px 14px",borderBottom:i<Math.min(3,budgetSettled.length-1)?"0.5px solid #f2ede6":"none"}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                  <span style={{fontSize:13,fontWeight:500,color:"#2c2420"}}>{monthLabel(r.month)}</span>
-                  <span style={{fontSize:11,color:"#9b9186"}}>{r.month}</span>
-                </div>
-                {r.owes?<div style={{fontSize:12,color:"#b8815a"}}>{r.owes.from.label} betalade {sek(r.owes.amount)} till {r.owes.to.label}</div>
-                :<div style={{fontSize:12,color:"#5a8c5a"}}>Jämnt! 🎉</div>}
-              </div>
-            ))}
+            {budgetSettled.map((r,i)=>(<BudgetHistoryRow key={r.id} r={r} monthLabel={monthLabel}/>))}
           </Card>
         </div>
       )}
@@ -3195,6 +3371,16 @@ function App(){
   const [expiryItems]=useLS(KEYS.expiry,[]);
   const [pickupEnabled,setPickupEnabled]=useLS(KEYS.pickupEnabled,true);
   const [actPausesApp]=useLS(KEYS.actPauses,{});
+  const [weeklyMenu,setWeeklyMenu]=useLS(KEYS.weeklyMenu,[]);
+  const [weeklyMenuWeekKey,setWeeklyMenuWeekKey]=useLS(KEYS.weeklyMenuWeekKey,"");
+  // Veckomenyn rensas automatiskt så fort en ny arbetsvecka börjar (nyckeln byts på lördagar)
+  useEffect(()=>{
+    const key=getMenuWeekKey();
+    if(weeklyMenuWeekKey!==key){
+      setWeeklyMenu([]);
+      setWeeklyMenuWeekKey(key);
+    }
+  },[]);
   const dateStr=new Date().toLocaleDateString("sv-SE",{weekday:"long",day:"numeric",month:"long"});
 
   // Varna om användaren försöker lämna sidan med osparade ändringar
@@ -3416,8 +3602,8 @@ function App(){
         {TABS.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{flexShrink:0,flex:"1 0 auto",background:tab===t.id?"#f7f4ef":"transparent",border:"none",borderRadius:14,padding:"8px 4px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",color:tab===t.id?"#2c2420":"#9b9186",fontWeight:tab===t.id?500:400,fontSize:10,display:"flex",flexDirection:"column",alignItems:"center",gap:3,boxShadow:tab===t.id?"0 1px 4px rgba(0,0,0,0.08)":"none",transition:"all .15s",minWidth:50}}><Ic n={t.icon} s={17}/>{t.label}</button>))}
       </div>
       <div style={{padding:"20px 14px 100px"}}>
-        {tab==="home"    &&<Briefing todos={todos} userEvents={userEvents} pickupData={pickupEnabled?pickupData:{}} activities={activities} expiryItems={expiryItems} viewerId={viewer} navigateTo={setTab} pickupEnabled={pickupEnabled} actPauses={actPausesApp}/>}
-        {tab==="grocery" &&<Grocery/>}
+        {tab==="home"    &&<Briefing todos={todos} userEvents={userEvents} pickupData={pickupEnabled?pickupData:{}} activities={activities} expiryItems={expiryItems} viewerId={viewer} navigateTo={setTab} pickupEnabled={pickupEnabled} actPauses={actPausesApp} weeklyMenu={weeklyMenu} setWeeklyMenu={setWeeklyMenu}/>}
+        {tab==="grocery" &&<Grocery weeklyMenu={weeklyMenu} setWeeklyMenu={setWeeklyMenu}/>}
         {tab==="todo"    &&<Todo viewerId={viewer}/>}
         {tab==="calendar"&&<Calendar/>}
         {tab==="pickup"  &&<Pickup data={pickupData} setData={setPickupData} pickupEnabled={pickupEnabled} setPickupEnabled={setPickupEnabled}/>}
