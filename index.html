@@ -1012,10 +1012,11 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
     notDone.forEach(it=>{
       const key=it.name.trim().toLowerCase();
       if(!merged[key]){
-        merged[key]={name:it.name.trim(),qty:it.qty||"",person:it.person,cat:it.cat||""};
+        merged[key]={name:it.name.trim(),qty:it.qty||"",person:it.person,cat:it.cat||"",count:1};
         order.push(key);
       } else {
         const existing=merged[key];
+        existing.count+=1;
         const p1=parseQtyStr(existing.qty),p2=parseQtyStr(it.qty);
         if(p1&&p2&&p1.unit===p2.unit){
           existing.qty=`${formatMergedNum(p1.num+p2.num)}${p2.unit?" "+p2.unit:""}`;
@@ -1029,8 +1030,9 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
     });
     const mergedList=order.map((key,i)=>{
       const m=merged[key];
+      const qty=(!m.qty&&m.count>1)?String(m.count):m.qty;
       const cat=m.cat||guessCategoryForItem(m.name,groceryCats);
-      return {id:Date.now()+i,name:m.name,qty:m.qty,person:m.person||"a",cat,done:false};
+      return {id:Date.now()+i,name:m.name,qty,person:m.person||"a",cat,done:false};
     });
     const catRank=c=>{
       if(!c)return -1;
@@ -1456,7 +1458,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {doneCount>0&&<button onClick={()=>setItems(items.filter(i=>!i.done))} style={{background:"none",border:"none",color:"#b8815a",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa {doneCount} avb.</button>}
           {items.length>0&&<button onClick={()=>setShowClearAll(true)} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa allt</button>}
-          {items.length>0&&<button onClick={handleOrganizeClick} style={{background:"none",border:"none",color:"#4a5a8c",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Ordna efter butik</button>}
+          {items.length>0&&<button onClick={handleOrganizeClick} title="Ordna efter butik" style={{background:"none",border:"none",color:"#4a5a8c",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Ordna</button>}
           <button onClick={()=>setShowStoreMgr(true)} title="Hantera butiker" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="flag" s={18}/></button>
           <button onClick={()=>setShowTplMgr(true)} title="Matmallar" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="template" s={18}/></button>
           <button onClick={()=>setShowCatMgr(true)} title="Hantera kategorier" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="tag" s={18}/></button>
