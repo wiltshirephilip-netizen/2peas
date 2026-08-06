@@ -41,7 +41,8 @@ const KEYS={
   budgetTemplates:"peas_budget_tpl",budgetSettled:"peas_budget_settled",
   household:"peas_household_cfg",pin:"peas_pin",pinSession:"peas_pin_session",pickupEnabled:"peas_pickup_enabled",
   actPauses:"peas_act_pauses",
-  weeklyMenu:"peas_weekly_menu",weeklyMenuWeekKey:"peas_weekly_menu_weekkey"
+  weeklyMenu:"peas_weekly_menu",weeklyMenuWeekKey:"peas_weekly_menu_weekkey",
+  stores:"peas_stores"
 };
 
 // PIN och viewer sparas lokalt per enhet
@@ -836,6 +837,42 @@ const RECIPE_TIME=[
   {id:"quick",label:"< 30 min"},{id:"medium",label:"30–60 min"},{id:"long",label:"> 60 min"},
 ];
 
+// ─── STORE SORTING HELPERS ──────────────────────────────────────────────────
+// Keyword→category guesses, used only for items that don't already have a category.
+// Only applied when the guessed category name actually exists in the user's own list.
+const CATEGORY_KEYWORDS={
+  "Mejeri":["mjölk","ost","grädde","smör","yoghurt","fil","ägg","créme fraiche","creme fraiche","kvarg","fetaost","messmör"],
+  "Frukt & grönt":["äpple","äpplen","banan","bananer","citron","lime","apelsin","tomat","tomater","lök","potatis","sallad","gurka","paprika","morot","morötter","vitlök","avokado","broccoli","zucchini","svamp","champinjon","bär","druvor","chili","ingefära","koriander","persilja","dill","basilika","spenat","citrongräs"],
+  "Kött & fisk":["kyckling","nötfärs","fläskfärs","fläsk","biff","bacon","korv","lax","torsk","räkor","räka","fisk","skinka","kotlett","köttfärs","filé"],
+  "Torrvaror":["pasta","ris","mjöl","socker","bönor","linser","havregryn","couscous","quinoa","krossade tomater","buljong","olja","vinäger","kryddor","nudlar","müsli","flingor","kex","choklad","kaffe","te"],
+  "Hygien":["schampo","tandkräm","tvål","deodorant","blöjor","bindor","rakhyvel","balsam","tandborste"],
+  "Hushåll":["diskmedel","hushållspapper","tvättmedel","soppåsar","folie","bakplåtspapper","toalettpapper","diskborste"],
+};
+function guessCategoryForItem(name,groceryCats){
+  const n=name.toLowerCase();
+  for(const [cat,words] of Object.entries(CATEGORY_KEYWORDS)){
+    if(!groceryCats.includes(cat))continue;
+    if(words.some(w=>n.includes(w)))return cat;
+  }
+  return "";
+}
+function getEffectiveStoreOrder(store,groceryCats){
+  const order=store?.order||[];
+  const known=new Set(order);
+  const missing=groceryCats.filter(c=>!known.has(c));
+  const valid=order.filter(c=>groceryCats.includes(c));
+  return [...valid,...missing];
+}
+function parseQtyStr(qty){
+  if(!qty)return null;
+  const m=qty.trim().match(/^([\d]+(?:[.,]\d+)?)\s*(.*)$/);
+  if(!m)return null;
+  return {num:parseFloat(m[1].replace(",",".")),unit:m[2].trim().toLowerCase()};
+}
+function formatMergedNum(n){
+  return Number.isInteger(n)?String(n):String(Math.round(n*100)/100).replace(".",",");
+}
+
 function StarRating({value,onChange,size=18}){
   const [hover,setHover]=useState(0);
   return(
@@ -899,6 +936,7 @@ function RecipeForm({initial,onSave,onClose,ambitionOpts=RECIPE_AMBITION,timeOpt
 
 function RecipeCard({r,onAddToList,onAddToMenu,onEdit,onDelete,ambitionOpts=RECIPE_AMBITION,timeOpts=RECIPE_TIME}){
   const [open,setOpen]=useState(false);
+  const [menuAdded,setMenuAdded]=useState(false);
   const amb=ambitionOpts.find(a=>a.id===r.ambition);
   const ti=timeOpts.find(t=>t.id===r.time);
   return(
@@ -913,7 +951,7 @@ function RecipeCard({r,onAddToList,onAddToMenu,onEdit,onDelete,ambitionOpts=RECI
           </div>
         </div>
         {/* Quick add buttons always visible */}
-        <button onClick={()=>onAddToMenu(r)} title="Lägg till i veckomenyn" style={{height:36,padding:"0 10px",borderRadius:10,background:"#ede8e1",color:"#2c2420",border:"none",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>+ Meny</button>
+        <button onClick={()=>{onAddToMenu(r);setMenuAdded(true);setTimeout(()=>setMenuAdded(false),1600);}} title="Lägg till i veckomenyn" style={{height:36,padding:"0 10px",borderRadius:10,background:menuAdded?"#5a8c5a":"#ede8e1",color:menuAdded?"#fff":"#2c2420",border:"none",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap",transition:"background .15s"}}>{menuAdded?"✓ Tillagd":"+ Meny"}</button>
         <button onClick={()=>onAddToList(r)} title="Lägg till i inköpslistan" style={{height:36,padding:"0 12px",borderRadius:10,background:"#b8815a",color:"#fff",border:"none",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>+ Lista</button>
         <span onClick={()=>setOpen(!open)} style={{color:"#c4bcaf",fontSize:18,cursor:"pointer",paddingTop:4}}>{open?"▾":"▸"}</span>
       </div>
@@ -943,6 +981,71 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
   const [recipes,setRecipes]=useLS(KEYS.recipes,[]);
   const defaultCats=["Mejeri","Frukt & grönt","Kött & fisk","Torrvaror","Hygien","Hushåll","Övrigt"];
   const [groceryCats,setGroceryCats]=useLS(KEYS.groceryCats,defaultCats);
+  const [stores,setStores]=useLS(KEYS.stores,[]);
+  const [showStoreMgr,setShowStoreMgr]=useState(false);
+  const [showStorePicker,setShowStorePicker]=useState(false);
+  const [newStoreName,setNewStoreName]=useState("");
+  const addStore=()=>{
+    const name=newStoreName.trim();
+    if(!name)return;
+    setStores(prev=>[...prev,{id:Date.now(),name,order:[...groceryCats]}]);
+    setNewStoreName("");
+  };
+  const removeStore=id=>setStores(prev=>prev.filter(s=>s.id!==id));
+  const moveStoreCat=(storeId,index,dir)=>{
+    setStores(prev=>prev.map(s=>{
+      if(s.id!==storeId)return s;
+      const order=getEffectiveStoreOrder(s,groceryCats);
+      const newIndex=index+dir;
+      if(newIndex<0||newIndex>=order.length)return {...s,order};
+      const arr=[...order];
+      [arr[index],arr[newIndex]]=[arr[newIndex],arr[index]];
+      return {...s,order:arr};
+    }));
+  };
+  const organizeByStore=(store)=>{
+    const effectiveOrder=getEffectiveStoreOrder(store,groceryCats);
+    const notDone=items.filter(i=>!i.done);
+    const doneItems=items.filter(i=>i.done);
+    const merged={};
+    const order=[];
+    notDone.forEach(it=>{
+      const key=it.name.trim().toLowerCase();
+      if(!merged[key]){
+        merged[key]={name:it.name.trim(),qty:it.qty||"",person:it.person,cat:it.cat||""};
+        order.push(key);
+      } else {
+        const existing=merged[key];
+        const p1=parseQtyStr(existing.qty),p2=parseQtyStr(it.qty);
+        if(p1&&p2&&p1.unit===p2.unit){
+          existing.qty=`${formatMergedNum(p1.num+p2.num)}${p2.unit?" "+p2.unit:""}`;
+        } else if(existing.qty&&it.qty&&existing.qty!==it.qty){
+          existing.qty=`${existing.qty} + ${it.qty}`;
+        } else if(!existing.qty&&it.qty){
+          existing.qty=it.qty;
+        }
+        if(!existing.cat&&it.cat)existing.cat=it.cat;
+      }
+    });
+    const mergedList=order.map((key,i)=>{
+      const m=merged[key];
+      const cat=m.cat||guessCategoryForItem(m.name,groceryCats);
+      return {id:Date.now()+i,name:m.name,qty:m.qty,person:m.person||"a",cat,done:false};
+    });
+    const catRank=c=>{
+      if(!c)return -1;
+      const idx=effectiveOrder.indexOf(c);
+      return idx===-1?effectiveOrder.length:idx;
+    };
+    mergedList.sort((a,b)=>catRank(a.cat)-catRank(b.cat));
+    setItems([...mergedList,...doneItems]);
+    setShowStorePicker(false);
+  };
+  const handleOrganizeClick=()=>{
+    if(stores.length===0){setShowStoreMgr(true);return;}
+    if(stores.length===1){organizeByStore(stores[0]);return;}
+    setShowStorePicker(true);
+  };
   const [f,setF]=useState({name:"",qty:"",person:"a",cat:"",targetGroup:null});
   const [showNewHeadingInput,setShowNewHeadingInput]=useState(false);
   const [newHeadingName,setNewHeadingName]=useState("");
@@ -1030,10 +1133,10 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         tags:(data.dishTypes||[]).slice(0,3),
         url:url,
       };
-      setRecipes(prev=>[newRecipe,...prev]);
+      setImportDraft(newRecipe);
       setShowImport(false);
       setImportUrl("");
-      setEditRecipe(newRecipe.id);
+      setEditRecipe(null);
       setShowRecipeForm(true);
     }catch(e){
       console.error("Import error:",e);
@@ -1042,6 +1145,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
     setImportLoading(false);
   };
   const [editRecipe,setEditRecipe]=useState(null);
+  const [importDraft,setImportDraft]=useState(null); // holds a just-imported recipe pending review/save; not yet in `recipes`
   const [recipeFilter,setRecipeFilter]=useState({ambition:"",time:"",minRating:0});
   const [recipeSearch,setRecipeSearch]=useState("");
   const [showFilterEdit,setShowFilterEdit]=useState(false);
@@ -1116,8 +1220,14 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
     setSub("list");
   };
   const saveRecipe=data=>{
-    if(editRecipe)setRecipes(prev=>prev.map(r=>r.id===editRecipe?{...r,...data}:r));
-    else setRecipes(prev=>[...prev,{id:Date.now(),...data}]);
+    if(importDraft){
+      setRecipes(prev=>[{id:importDraft.id,...data},...prev]);
+      setImportDraft(null);
+    } else if(editRecipe){
+      setRecipes(prev=>prev.map(r=>r.id===editRecipe?{...r,...data}:r));
+    } else {
+      setRecipes(prev=>[...prev,{id:Date.now(),...data}]);
+    }
     setEditRecipe(null);
   };
 
@@ -1215,7 +1325,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         <button onClick={()=>setSub("list")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Inköpslista</button>
         <button onClick={()=>setSub("recipes")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Recept</button>
       </div>
-      <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setShowRecipeForm(true);}} extra={
+      <SHdr title="Recept" onAdd={()=>{setEditRecipe(null);setImportDraft(null);setShowRecipeForm(true);}} extra={
         <React.Fragment>
           <button onClick={()=>setShowImport(true)} style={{background:"#b8815a",border:"none",borderRadius:10,padding:"6px 10px",cursor:"pointer",color:"#fff",fontSize:12,fontFamily:"inherit",fontWeight:500,display:"flex",alignItems:"center",gap:5}}><Ic n="link" s={14} color="#fff"/> Importera</button>
           <button onClick={()=>{setFilterEditForm({ambition:[...ambitionOpts],time:[...timeOpts]});setShowFilterEdit(true);}} style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="adjustments" s={17}/></button>
@@ -1239,7 +1349,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         </div>
       </div>
       {filteredRecipes.length===0&&<Empty n="spark" text={recipes.length===0?"Spara ert första recept!":"Inga recept matchar filtret"}/>}
-      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} ambitionOpts={ambitionOpts} timeOpts={timeOpts} onAddToList={addFromRecipe} onAddToMenu={addRecipeToMenu} onEdit={r=>{setEditRecipe(r.id);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
+      {filteredRecipes.map(r=>(<RecipeCard key={r.id} r={r} ambitionOpts={ambitionOpts} timeOpts={timeOpts} onAddToList={addFromRecipe} onAddToMenu={addRecipeToMenu} onEdit={r=>{setEditRecipe(r.id);setImportDraft(null);setShowRecipeForm(true);}} onDelete={id=>setRecipes(prev=>prev.filter(r=>r.id!==id))}/>))}
       {showImport&&(
         <Modal title="Importera recept" onClose={()=>{setShowImport(false);setImportUrl("");setImportError("");}}>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -1323,12 +1433,13 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
       )}
 
       {showRecipeForm&&(
-        <Modal title={editRecipe?"Redigera recept":"Nytt recept"} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}>
+        <Modal title={importDraft?"Granska importerat recept":editRecipe?"Redigera recept":"Nytt recept"} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);setImportDraft(null);}}>
+          {importDraft&&<div style={{fontSize:12,color:"#9b9186",marginBottom:12,lineHeight:1.5}}>Granska och redigera innan du sparar. Stäng med krysset uppe till höger för att kassera utan att spara — importen har inte lagts till receptlistan ännu.</div>}
           <RecipeForm
-            key={editRecipe||"new"}
+            key={importDraft?("import-"+importDraft.id):(editRecipe||"new")}
             ambitionOpts={ambitionOpts} timeOpts={timeOpts}
-            initial={editRecipe?(()=>{const r=recipes.find(r=>r.id===editRecipe);return r?{...r,url:r.url||"",ingredientsText:(r.ingredients||[]).map(i=>i.qty?`${i.name}, ${i.qty}`:i.name).join("\n")}:null;})():null}
-            onSave={saveRecipe} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);}}
+            initial={importDraft?{...importDraft,url:importDraft.url||"",ingredientsText:(importDraft.ingredients||[]).map(i=>i.qty?`${i.name}, ${i.qty}`:i.name).join("\n")}:editRecipe?(()=>{const r=recipes.find(r=>r.id===editRecipe);return r?{...r,url:r.url||"",ingredientsText:(r.ingredients||[]).map(i=>i.qty?`${i.name}, ${i.qty}`:i.name).join("\n")}:null;})():null}
+            onSave={saveRecipe} onClose={()=>{setShowRecipeForm(false);setEditRecipe(null);setImportDraft(null);}}
           />
         </Modal>
       )}
@@ -1345,6 +1456,8 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {doneCount>0&&<button onClick={()=>setItems(items.filter(i=>!i.done))} style={{background:"none",border:"none",color:"#b8815a",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa {doneCount} avb.</button>}
           {items.length>0&&<button onClick={()=>setShowClearAll(true)} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa allt</button>}
+          {items.length>0&&<button onClick={handleOrganizeClick} style={{background:"none",border:"none",color:"#4a5a8c",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Ordna efter butik</button>}
+          <button onClick={()=>setShowStoreMgr(true)} title="Hantera butiker" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="flag" s={18}/></button>
           <button onClick={()=>setShowTplMgr(true)} title="Matmallar" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="template" s={18}/></button>
           <button onClick={()=>setShowCatMgr(true)} title="Hantera kategorier" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="tag" s={18}/></button>
         </div>
@@ -1546,6 +1659,51 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
               <input style={{...inp,flex:1}} placeholder="Ny kategori…" value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&newCatName.trim()&&(setGroceryCats([...groceryCats,newCatName.trim()]),setNewCatName(""))}/>
               <button onClick={()=>{if(newCatName.trim()){setGroceryCats([...groceryCats,newCatName.trim()]);setNewCatName("");}}} style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Store manager */}
+      {showStoreMgr&&(
+        <Modal title="Butiker" onClose={()=>setShowStoreMgr(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{fontSize:12,color:"#9b9186",lineHeight:1.5}}>Ställ in i vilken ordning kategorierna kommer i respektive butik — du behöver bara göra det en gång per butik. "Ordna efter butik" sorterar sedan listan efter detta och slår ihop dubbletter (t.ex. två recept som båda kräver citron blir "2 citron").</div>
+            {stores.length===0&&<div style={{textAlign:"center",color:"#9b9186",padding:"12px 0",fontSize:13}}>Inga butiker ännu.</div>}
+            {stores.map(store=>{
+              const order=getEffectiveStoreOrder(store,groceryCats);
+              return(
+                <div key={store.id} style={{background:"#f7f4ef",borderRadius:12,padding:"12px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                    <span style={{flex:1,fontSize:14,fontWeight:600,color:"#2c2420"}}>{store.name}</span>
+                    <button onClick={()=>removeStore(store.id)} style={{background:"none",border:"none",color:"#d6d0c4",cursor:"pointer",padding:2}}><Ic n="trash" s={15} color="#c0392b"/></button>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {order.map((cat,i)=>(
+                      <div key={cat} style={{display:"flex",alignItems:"center",gap:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>
+                        <span style={{flex:1,fontSize:13,color:"#2c2420"}}>{i+1}. {cat}</span>
+                        <button onClick={()=>moveStoreCat(store.id,i,-1)} disabled={i===0} style={{background:"none",border:"none",cursor:i===0?"default":"pointer",color:i===0?"#e2ddd6":"#6b6357",padding:2,fontSize:13}}>▲</button>
+                        <button onClick={()=>moveStoreCat(store.id,i,1)} disabled={i===order.length-1} style={{background:"none",border:"none",cursor:i===order.length-1?"default":"pointer",color:i===order.length-1?"#e2ddd6":"#6b6357",padding:2,fontSize:13}}>▼</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{display:"flex",gap:8}}>
+              <input style={{...inp,flex:1}} placeholder="Ny butik, t.ex. ICA Maxi" value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addStore()}/>
+              <button onClick={addStore} style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Store picker (when more than one store is set up) */}
+      {showStorePicker&&(
+        <Modal title="Välj butik" onClose={()=>setShowStorePicker(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {stores.map(store=>(
+              <button key={store.id} onClick={()=>organizeByStore(store)} style={{padding:"12px 14px",borderRadius:12,background:"#f7f4ef",border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:14,color:"#2c2420",textAlign:"left"}}>{store.name}</button>
+            ))}
           </div>
         </Modal>
       )}
