@@ -842,12 +842,15 @@ const RECIPE_TIME=[
 // Keyword→category guesses, used only for items that don't already have a category.
 // Only applied when the guessed category name actually exists in the user's own list.
 const CATEGORY_KEYWORDS={
-  "Mejeri":["mjölk","ost","grädde","smör","yoghurt","fil","ägg","créme fraiche","creme fraiche","kvarg","fetaost","messmör"],
-  "Frukt & grönt":["äpple","äpplen","banan","bananer","citron","lime","apelsin","tomat","tomater","lök","potatis","sallad","gurka","paprika","morot","morötter","vitlök","avokado","broccoli","zucchini","svamp","champinjon","bär","druvor","chili","ingefära","koriander","persilja","dill","basilika","spenat","citrongräs"],
-  "Kött & fisk":["kyckling","nötfärs","fläskfärs","fläsk","biff","bacon","korv","lax","torsk","räkor","räka","fisk","skinka","kotlett","köttfärs","filé"],
-  "Torrvaror":["pasta","ris","mjöl","socker","bönor","linser","havregryn","couscous","quinoa","krossade tomater","buljong","olja","vinäger","kryddor","nudlar","müsli","flingor","kex","choklad","kaffe","te"],
-  "Hygien":["schampo","tandkräm","tvål","deodorant","blöjor","bindor","rakhyvel","balsam","tandborste"],
-  "Hushåll":["diskmedel","hushållspapper","tvättmedel","soppåsar","folie","bakplåtspapper","toalettpapper","diskborste"],
+  "Mejeri":["mjölk","ost","grädde","smör","yoghurt","fil","ägg","créme fraiche","creme fraiche","kvarg","fetaost","messmör","margarin","keso","mesost","filmjölk","gräddfil","havregrädde","havremjölk","laktosfri"],
+  "Frukt & grönt":["äpple","äpplen","banan","bananer","citron","lime","apelsin","tomat","tomater","lök","potatis","sallad","gurka","paprika","morot","morötter","vitlök","avokado","broccoli","zucchini","svamp","champinjon","bär","druvor","chili","ingefära","koriander","persilja","dill","basilika","spenat","citrongräs","päron","mango","ananas","melon","jordgubbar","blåbär","hallon","citronmeliss","mynta","rödlök","salladslök","purjolök","selleri","rödbeta","kål","blomkål","majs","kruspersilja","färsk timjan","färsk rosmarin","gullök"],
+  "Kött & fisk":["kyckling","nötfärs","fläskfärs","fläsk","biff","bacon","korv","lax","torsk","räkor","räka","fisk","skinka","kotlett","köttfärs","filé","kalkon","köttbullar","lammfärs","lamm","entrecote","fläskkarré","kycklingfilé","kycklinglårfilé","musslor","tonfisk","krabba"],
+  "Torrvaror":["pasta","ris","mjöl","socker","bönor","linser","havregryn","couscous","quinoa","krossade tomater","buljong","olja","vinäger","kryddor","nudlar","müsli","flingor","kex","choklad","kaffe","te","salt","peppar","honung","sylt","marmelad","kokosmjölk","tortillabröd","panko","ströbröd","jäst","bakpulver","vaniljsocker","kanel","curry","spiskummin","paprikapulver","chilipulver","olivolja","rapsolja","soja","sojasås","ketchup","senap","majonnäs","nötter","mandel","russin","kikärtor","cashewnötter"],
+  "Bröd & bageri":["bröd","fralla","frallor","baguette","knäckebröd","tortilla","pitabröd","bulle","bullar","kaka","muffins","limpa","toast","tunnbröd"],
+  "Fryst":["glass","fryst","frysta","pommes","fiskpinnar","frysta bär","frysta grönsaker","pizza"],
+  "Dryck":["läsk","juice","saft","vatten","öl","vin","cider","kombucha","must","festis"],
+  "Hygien":["schampo","tandkräm","tvål","deodorant","blöjor","bindor","rakhyvel","balsam","tandborste","tamponger","hudkräm","solkräm","handkräm"],
+  "Hushåll":["diskmedel","hushållspapper","tvättmedel","soppåsar","folie","bakplåtspapper","toalettpapper","diskborste","diskmaskinstabletter","tvättmedelstabletter","batteri","ljus","påsar","sopsäck","sköljmedel"],
 };
 function guessCategoryForItem(name,groceryCats){
   const n=name.toLowerCase();
@@ -855,6 +858,10 @@ function guessCategoryForItem(name,groceryCats){
     if(!groceryCats.includes(cat))continue;
     if(words.some(w=>n.includes(w)))return cat;
   }
+  // Nothing recognized — fall back to "Övrigt" (if it exists) so the item still
+  // gets positioned according to the chosen store's order instead of staying
+  // uncategorized and unaffected by which store you pick.
+  if(groceryCats.includes("Övrigt"))return "Övrigt";
   return "";
 }
 function getEffectiveStoreOrder(store,groceryCats){
@@ -1040,7 +1047,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
       return {id:Date.now()+"_"+organizeIdSeed.current,name:m.name,qty,person:m.person||"a",cat,done:false};
     });
     const catRank=c=>{
-      if(!c)return -1;
+      if(!c)return effectiveOrder.length;
       const idx=effectiveOrder.indexOf(c);
       return idx===-1?effectiveOrder.length:idx;
     };
