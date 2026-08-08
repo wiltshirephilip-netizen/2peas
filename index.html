@@ -201,6 +201,7 @@ const PATHS={
   note:"M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z",
   adjustments:"M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75",
   search:"M21 21l-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 15.803 7.5 7.5 0 0 0 15.803 15.803Z",
+  gear:"M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 0 1 0 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
 };
 const Ic=({n,s=20,color="currentColor"})=>(
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
@@ -984,6 +985,7 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
   const [stores,setStores]=useLS(KEYS.stores,[]);
   const [showStoreMgr,setShowStoreMgr]=useState(false);
   const [showStorePicker,setShowStorePicker]=useState(false);
+  const [showSettings,setShowSettings]=useState(false);
   const [newStoreName,setNewStoreName]=useState("");
   const addStore=()=>{
     const name=newStoreName.trim();
@@ -1003,6 +1005,8 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
       return {...s,order:arr};
     }));
   };
+  const [organizeFeedback,setOrganizeFeedback]=useState(null);
+  const organizeIdSeed=useRef(0);
   const organizeByStore=(store)=>{
     const effectiveOrder=getEffectiveStoreOrder(store,groceryCats);
     const notDone=items.filter(i=>!i.done);
@@ -1028,11 +1032,12 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         if(!existing.cat&&it.cat)existing.cat=it.cat;
       }
     });
-    const mergedList=order.map((key,i)=>{
+    const mergedList=order.map((key)=>{
+      organizeIdSeed.current+=1;
       const m=merged[key];
       const qty=(!m.qty&&m.count>1)?String(m.count):m.qty;
       const cat=m.cat||guessCategoryForItem(m.name,groceryCats);
-      return {id:Date.now()+i,name:m.name,qty,person:m.person||"a",cat,done:false};
+      return {id:Date.now()+"_"+organizeIdSeed.current,name:m.name,qty,person:m.person||"a",cat,done:false};
     });
     const catRank=c=>{
       if(!c)return -1;
@@ -1042,6 +1047,8 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
     mergedList.sort((a,b)=>catRank(a.cat)-catRank(b.cat));
     setItems([...mergedList,...doneItems]);
     setShowStorePicker(false);
+    setOrganizeFeedback(store.name);
+    setTimeout(()=>setOrganizeFeedback(null),2200);
   };
   const handleOrganizeClick=()=>{
     if(stores.length===0){setShowStoreMgr(true);return;}
@@ -1454,16 +1461,22 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
         <button style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#2c2420",color:"#fff",fontWeight:500}}>Inköpslista</button>
         <button onClick={()=>setSub("recipes")} style={{flex:1,padding:"8px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",background:"#ede8e1",color:"#6b6357"}}>Recept {recipes.length>0&&`(${recipes.length})`}</button>
       </div>
-      <SHdr title="Inköpslista" extra={<button onClick={()=>setShowPantryMgr(true)} title="Skafferi" style={{background:"none",border:"none",cursor:"pointer",padding:2,fontSize:18}}>🥫</button>}>
+      <SHdr title="Inköpslista">
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {doneCount>0&&<button onClick={()=>setItems(items.filter(i=>!i.done))} style={{background:"none",border:"none",color:"#b8815a",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa {doneCount} avb.</button>}
           {items.length>0&&<button onClick={()=>setShowClearAll(true)} style={{background:"none",border:"none",color:"#c0392b",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Rensa allt</button>}
           {items.length>0&&<button onClick={handleOrganizeClick} title="Ordna efter butik" style={{background:"none",border:"none",color:"#4a5a8c",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Ordna</button>}
-          <button onClick={()=>setShowStoreMgr(true)} title="Hantera butiker" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="flag" s={18}/></button>
           <button onClick={()=>setShowTplMgr(true)} title="Matmallar" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="template" s={18}/></button>
-          <button onClick={()=>setShowCatMgr(true)} title="Hantera kategorier" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="tag" s={18}/></button>
+          <button onClick={()=>setShowSettings(true)} title="Inställningar" style={{background:"none",border:"none",cursor:"pointer",color:"#9b9186",padding:2}}><Ic n="gear" s={18}/></button>
         </div>
       </SHdr>
+
+      {organizeFeedback&&(
+        <div style={{background:"#e8f0e8",borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:12,color:"#3a6b3a",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>✓ Ordnad efter {organizeFeedback}</span>
+          {stores.length>1&&<button onClick={()=>{setOrganizeFeedback(null);setShowStorePicker(true);}} style={{background:"none",border:"none",color:"#4a5a8c",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:500}}>Byt butik</button>}
+        </div>
+      )}
 
       {/* Inline add row */}
       <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
@@ -1661,6 +1674,38 @@ function Grocery({weeklyMenu,setWeeklyMenu}){
               <input style={{...inp,flex:1}} placeholder="Ny kategori…" value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&newCatName.trim()&&(setGroceryCats([...groceryCats,newCatName.trim()]),setNewCatName(""))}/>
               <button onClick={()=>{if(newCatName.trim()){setGroceryCats([...groceryCats,newCatName.trim()]);setNewCatName("");}}} style={{width:44,height:44,borderRadius:12,background:"#b8815a",border:"none",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,padding:0}}><Ic n="plus" s={18}/></button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Settings menu — collects Pantry / Stores / Categories in one place */}
+      {showSettings&&(
+        <Modal title="Inställningar" onClose={()=>setShowSettings(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <button onClick={()=>{setShowSettings(false);setShowPantryMgr(true);}} style={{display:"flex",alignItems:"center",gap:12,padding:"14px",borderRadius:12,background:"#f7f4ef",border:"none",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+              <span style={{fontSize:20}}>🥫</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:500,color:"#2c2420"}}>Skafferivaror</div>
+                <div style={{fontSize:12,color:"#9b9186"}}>Vad ni redan har hemma</div>
+              </div>
+              <Ic n="chevR" s={16} color="#c4bcaf"/>
+            </button>
+            <button onClick={()=>{setShowSettings(false);setShowStoreMgr(true);}} style={{display:"flex",alignItems:"center",gap:12,padding:"14px",borderRadius:12,background:"#f7f4ef",border:"none",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+              <Ic n="flag" s={20} color="#6b6357"/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:500,color:"#2c2420"}}>Hantera butiker</div>
+                <div style={{fontSize:12,color:"#9b9186"}}>Kategoriordning per butik</div>
+              </div>
+              <Ic n="chevR" s={16} color="#c4bcaf"/>
+            </button>
+            <button onClick={()=>{setShowSettings(false);setShowCatMgr(true);}} style={{display:"flex",alignItems:"center",gap:12,padding:"14px",borderRadius:12,background:"#f7f4ef",border:"none",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+              <Ic n="tag" s={20} color="#6b6357"/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:500,color:"#2c2420"}}>Kategorier</div>
+                <div style={{fontSize:12,color:"#9b9186"}}>Hantera inköpslistans kategorier</div>
+              </div>
+              <Ic n="chevR" s={16} color="#c4bcaf"/>
+            </button>
           </div>
         </Modal>
       )}
@@ -3595,15 +3640,6 @@ function App(){
   const [pickupEnabled,setPickupEnabled]=useLS(KEYS.pickupEnabled,true);
   const [actPausesApp]=useLS(KEYS.actPauses,{});
   const [weeklyMenu,setWeeklyMenu]=useLS(KEYS.weeklyMenu,[]);
-  const [weeklyMenuWeekKey,setWeeklyMenuWeekKey]=useLS(KEYS.weeklyMenuWeekKey,"");
-  // Veckomenyn rensas automatiskt så fort en ny arbetsvecka börjar (nyckeln byts på lördagar)
-  useEffect(()=>{
-    const key=getMenuWeekKey();
-    if(weeklyMenuWeekKey!==key){
-      setWeeklyMenu([]);
-      setWeeklyMenuWeekKey(key);
-    }
-  },[]);
   const dateStr=new Date().toLocaleDateString("sv-SE",{weekday:"long",day:"numeric",month:"long"});
 
   // Varna om användaren försöker lämna sidan med osparade ändringar
